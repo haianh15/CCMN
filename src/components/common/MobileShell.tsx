@@ -128,13 +128,22 @@ export const MobileShell: React.FC<MobileShellProps> = ({ children }) => {
             <div role="alert" className="rounded-2xl border border-rose-200 bg-white p-5 shadow-sm sm:p-7">
               <h1 className="text-lg font-semibold text-slate-900">Không tải được dữ liệu</h1>
               <p className="mt-2 text-sm leading-6 text-slate-600">{databaseError}</p>
-              <button
-                type="button"
-                onClick={retryLoadData}
-                className="mt-4 inline-flex min-h-10 items-center gap-2 rounded-lg bg-blue-600 px-4 text-sm font-semibold text-white hover:bg-blue-700"
-              >
-                <RefreshCw className="h-4 w-4" /> Thử tải lại
-              </button>
+              <div className="mt-4 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={retryLoadData}
+                  className="inline-flex min-h-10 items-center gap-2 rounded-lg bg-blue-600 px-4 text-sm font-semibold text-white hover:bg-blue-700"
+                >
+                  <RefreshCw className="h-4 w-4" /> Thử tải lại
+                </button>
+                <button
+                  type="button"
+                  onClick={logout}
+                  className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-slate-300 px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                >
+                  <LogOut className="h-4 w-4" /> Đăng xuất
+                </button>
+              </div>
             </div>
           </section>
         ) : (

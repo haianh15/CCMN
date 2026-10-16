@@ -254,6 +254,7 @@ const mapAuthUser = (user: User) => ({
 const LOGIN_GUARD_KEY = 'greenhouse.login-guard.v1';
 const SESSION_IDLE_LIMIT_MS = 30 * 60 * 1000;
 const LOGIN_LOCK_MS = 15 * 60 * 1000;
+const APP_STATE_LOAD_TIMEOUT_MS = 15_000;
 
 const parseLocalDate = (value: string): Date | null => {
   const vietnameseDate = value.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
@@ -506,6 +507,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             .select('revision')
             .single();
 
+          if (!active) return;
           if (insertError?.code === '23505') {
             const { data: concurrentRow, error: retryError } = await client
               .from('app_state')
@@ -534,12 +536,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
       };
 
-      loadData().catch(error => {
-        if (!active) return;
-        console.error('Không thể tải dữ liệu từ Supabase.', error);
-        setDatabaseError('Không tải được dữ liệu. Kiểm tra bảng app_state và chính sách RLS trong Supabase.');
-        setDataLoading(false);
+      let timeoutId: number | undefined;
+      const timeout = new Promise<never>((_, reject) => {
+        timeoutId = window.setTimeout(
+          () => reject(new Error('APP_STATE_LOAD_TIMEOUT')),
+          APP_STATE_LOAD_TIMEOUT_MS
+        );
       });
+
+      Promise.race([loadData(), timeout])
+        .catch(error => {
+          if (!active) return;
+          active = false;
+          console.error('Không thể tải dữ liệu từ Supabase.', error);
+          setDatabaseError(error instanceof Error && error.message === 'APP_STATE_LOAD_TIMEOUT'
+            ? 'Máy chủ dữ liệu không phản hồi sau 15 giây. Kiểm tra kết nối mạng, bảng app_state và chính sách RLS trong Supabase.'
+            : 'Không tải được dữ liệu. Kiểm tra bảng app_state và chính sách RLS trong Supabase.');
+          setDataLoading(false);
+        })
+        .finally(() => {
+          if (timeoutId !== undefined) window.clearTimeout(timeoutId);
+        });
 
       return () => {
         active = false;
