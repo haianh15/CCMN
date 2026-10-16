@@ -15,11 +15,12 @@ import { ReportScreens } from './screens/ReportScreens';
 import { SettingScreens } from './screens/SettingScreens';
 
 const MainRouter: React.FC = () => {
-  const { currentScreenId, params, isAuthenticated } = useApp();
+  const { currentScreenId, params, isAuthenticated, isFirstPasswordChangeRequired } = useApp();
   const screenKey = `${currentScreenId}:${JSON.stringify(params)}`;
   const authScreens = ['START', 'LOGIN', 'FIRSTPASS', 'FORGOT', 'RESET', 'ACCOUNT'];
 
-  if (!isAuthenticated && !authScreens.includes(currentScreenId)) {
+  if ((!isAuthenticated && !authScreens.includes(currentScreenId)) ||
+      (isAuthenticated && isFirstPasswordChangeRequired && currentScreenId !== 'FIRSTPASS')) {
     return <AuthScreens key={screenKey} />;
   }
 
@@ -114,8 +115,9 @@ const MainRouter: React.FC = () => {
     return <SettingScreens key={screenKey} />;
   }
 
-  // Fallback to Dashboard
-  return <DashboardScreens key={screenKey} />;
+  return <div className="flex min-h-full items-center justify-center p-6 text-center text-sm text-slate-600">
+    Không tìm thấy trang này. Hãy quay lại trang chính và thử lại.
+  </div>;
 };
 
 export default function App() {

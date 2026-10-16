@@ -29,10 +29,12 @@ export const ContractScreens: React.FC = () => {
     currentScreenId,
     params,
     navigate,
+    currentUser,
     contracts,
     rooms,
     tenants,
     rentalTerms,
+    tariffs,
     saveRentalTerms,
     createDraftContract,
     editDraftContract,
@@ -46,40 +48,42 @@ export const ContractScreens: React.FC = () => {
   const currentContract = (targetContractId
     ? contracts.find(c => c.id === targetContractId)
     : params.roomId
-      ? contracts.find(c => c.roomId === params.roomId)
-      : contractRequired ? undefined : contracts[0])!;
+      ? contracts.find(c => c.id === rooms.find(room => room.id === params.roomId)?.currentContractId) ||
+        contracts.filter(c => c.roomId === params.roomId && c.status !== 'KET_THUC')
+          .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0]
+      : undefined)!;
   const contractRoom = rooms.find(r => r.id === currentContract?.roomId);
   const contractTenant = tenants.find(t => t.id === currentContract?.tenantId);
-  const firstVacantRoom = rooms.find(room => room.status === 'TRONG');
-  const firstProspectiveTenant = tenants.find(tenant => tenant.status === 'TIEM_NANG');
-
   // Search & filter for CONTRACTS list
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<'ALL' | ContractStatus>('ALL');
 
   // RENTAL_TERMS form
-  const [termRoomId, setTermRoomId] = useState((params.roomId as string | undefined) || firstVacantRoom?.id || '');
-  const [termTenantId, setTermTenantId] = useState((params.tenantId as string | undefined) || firstProspectiveTenant?.id || '');
+  const [termRoomId, setTermRoomId] = useState((params.roomId as string | undefined) || '');
+  const [termTenantId, setTermTenantId] = useState((params.tenantId as string | undefined) || '');
   const [termDuration, setTermDuration] = useState<number>(12);
-  const [termStart, setTermStart] = useState('20/10/2026');
-  const [termEnd, setTermEnd] = useState('20/10/2027');
+  const [termStart, setTermStart] = useState('');
+  const [termEnd, setTermEnd] = useState('');
   const [termRent, setTermRent] = useState<number>(() =>
     rentalTerms[termRoomId]?.monthlyRent ?? rooms.find(room => room.id === termRoomId)?.basePrice ?? 0
   );
-  const [termServiceFee, setTermServiceFee] = useState<number>(150000);
-  const [termNotes, setTermNotes] = useState('Khách thanh toán tiền mặt/chuyển khoản đầu tháng');
+  const [termServiceFee, setTermServiceFee] = useState<number>(() =>
+    tariffs.find(tariff => tariff.isActive)?.fixedServiceFeePerTenancy ?? 0
+  );
+  const [termNotes, setTermNotes] = useState('');
 
   // CONTRACT_SIGN form
-  const [signDate, setSignDate] = useState(new Date().toLocaleDateString('vi-VN'));
-  const [paperProofUrl, setPaperProofUrl] = useState('https://images.unsplash.com/photo-1450133064473-71024230f91b?auto=format&fit=crop&w=400&q=80');
+  const [signDate, setSignDate] = useState('');
+  const [paperProofUrl, setPaperProofUrl] = useState('');
 
   // CONTRACT_RENEW form
   const [renewMonths, setRenewMonths] = useState<number>(12);
-  const [renewStartDate, setRenewStartDate] = useState('01/11/2026');
-  const [renewEndDate, setRenewEndDate] = useState('01/11/2027');
+  const [renewStartDate, setRenewStartDate] = useState('');
+  const [renewEndDate, setRenewEndDate] = useState('');
 
   // CONTRACT_EDIT form
   const [editTermsText, setEditTermsText] = useState(currentContract?.terms || '');
+  const [formError, setFormError] = useState<string | null>(null);
 
   const contractDetailScreens = ['CONTRACT_DETAIL', 'CONTRACT_EDIT', 'CONTRACT_SIGN', 'CONTRACT_RENEW', 'CONTRACT_RENEW_SIGN'];
   if (contractDetailScreens.includes(currentScreenId) && !currentContract) {
@@ -105,7 +109,7 @@ export const ContractScreens: React.FC = () => {
           subtitle={`${contracts.length} hợp đồng quản lý`}
           rightAction={
             <button
-              onClick={() => navigate('RENTAL_TERMS', { roomId: firstVacantRoom?.id, tenantId: firstProspectiveTenant?.id })}
+              onClick={() => navigate('RENTAL_TERMS')}
               className="px-2.5 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold flex items-center space-x-1"
             >
               <Plus className="w-3.5 h-3.5" />
@@ -214,7 +218,8 @@ export const ContractScreens: React.FC = () => {
   if (currentScreenId === 'RENTAL_TERMS') {
     const handleSaveTerms = (e: React.FormEvent) => {
       e.preventDefault();
-      saveRentalTerms({
+      setFormError(null);
+      const result = saveRentalTerms({
         roomId: termRoomId,
         tenantId: termTenantId,
         durationMonths: termDuration,
@@ -224,11 +229,15 @@ export const ContractScreens: React.FC = () => {
         depositAmount: termRent, // strictly 1 month
         firstMonthRent: termRent, // strictly 1 month pre-paid
         serviceFeePerMonth: termServiceFee,
-        electricityRateType: 'Theo công tơ (3.800 đ/kWh)',
-        waterRateType: 'Theo đồng hồ (28.000 đ/m3)',
+        electricityRateType: 'Theo công tơ và đơn giá đã công bố',
+        waterRateType: 'Theo đồng hồ và đơn giá đã công bố',
         notes: termNotes,
         agreedAt: new Date().toLocaleDateString('vi-VN')
       });
+      if (!result.success) {
+        setFormError(result.error || 'Chưa lưu được thỏa thuận.');
+        return;
+      }
       // Cross-link 12 to CONTRACT_NEW
       navigate('CONTRACT_NEW', { roomId: termRoomId, tenantId: termTenantId });
     };
@@ -243,17 +252,23 @@ export const ContractScreens: React.FC = () => {
 
         <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-xs space-y-3 text-xs">
           <form onSubmit={handleSaveTerms} className="space-y-3">
+            {formError && <p className="rounded-lg border border-rose-200 bg-rose-50 p-2 text-rose-800">{formError}</p>}
             <div className="grid grid-cols-2 gap-2">
               <div>
                 <label className="block font-bold text-slate-700 mb-1">Phòng thuê</label>
                 <select
                   value={termRoomId}
-                  onChange={e => setTermRoomId(e.target.value)}
+                  onChange={e => {
+                    const roomId = e.target.value;
+                    setTermRoomId(roomId);
+                    setTermRent(rentalTerms[roomId]?.monthlyRent ?? rooms.find(room => room.id === roomId)?.basePrice ?? 0);
+                  }}
                   className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white"
                 >
-                  {rooms.map(r => (
+                  <option value="" disabled>Chọn phòng trống</option>
+                  {rooms.filter(room => room.status === 'TRONG').map(r => (
                     <option key={r.id} value={r.id}>
-                      Phòng {r.roomNumber} ({r.status})
+                      Phòng {r.roomNumber}
                     </option>
                   ))}
                 </select>
@@ -265,7 +280,8 @@ export const ContractScreens: React.FC = () => {
                   onChange={e => setTermTenantId(e.target.value)}
                   className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white"
                 >
-                  {tenants.map(t => (
+                  <option value="" disabled>Chọn hồ sơ khách</option>
+                  {tenants.filter(tenant => tenant.status === 'TIEM_NANG' || tenant.id === termTenantId).map(t => (
                     <option key={t.id} value={t.id}>
                       {t.fullName} ({t.code})
                     </option>
@@ -359,21 +375,17 @@ export const ContractScreens: React.FC = () => {
   // 3. CONTRACT_NEW Screen (F.6 - Cross-link 13)
   if (currentScreenId === 'CONTRACT_NEW') {
     const handleCreateContract = () => {
-      const agreed = rentalTerms[termRoomId] || {
-        roomId: termRoomId,
-        tenantId: termTenantId,
-        durationMonths: termDuration,
-        startDate: termStart,
-        endDate: termEnd,
-        monthlyRent: termRent,
-        depositAmount: termRent,
-        firstMonthRent: termRent,
-        serviceFeePerMonth: termServiceFee,
-        electricityRateType: 'Theo công tơ',
-        waterRateType: 'Theo đồng hồ',
-        agreedAt: new Date().toLocaleDateString('vi-VN')
-      };
+      setFormError(null);
+      const agreed = rentalTerms[termRoomId];
+      if (!agreed) {
+        setFormError('Chưa có thỏa thuận thuê được lưu cho phòng này.');
+        return;
+      }
       const res = createDraftContract(agreed);
+      if (!res.success) {
+        setFormError(res.error || 'Chưa tạo được dự thảo hợp đồng.');
+        return;
+      }
       // Cross-link 13 to CONTRACT_DETAIL
       navigate('CONTRACT_DETAIL', { contractId: res.contractId, roomId: termRoomId, tenantId: termTenantId });
     };
@@ -387,6 +399,7 @@ export const ContractScreens: React.FC = () => {
         />
 
         <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-xs space-y-3 text-xs">
+          {formError && <p className="rounded-lg border border-rose-200 bg-rose-50 p-2 text-rose-800">{formError}</p>}
           <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-2">
             <div className="text-center font-bold text-slate-900 pb-2 border-b border-slate-200 text-sm">
               CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM<br />
@@ -397,8 +410,8 @@ export const ContractScreens: React.FC = () => {
             </div>
 
             <div className="space-y-1 text-slate-700 text-[11px] pt-2">
-              <p>• <strong>Bên cho thuê (Bên A):</strong> Nguyễn Văn Minh (Chủ nhà)</p>
-              <p>• <strong>Bên thuê (Bên B):</strong> {contractTenant?.fullName || 'Khách thuê'} (CCCD: {contractTenant?.idCardNumber || '001095...'})</p>
+              <p>• <strong>Bên cho thuê (Bên A):</strong> {currentUser?.fullName || 'Chủ nhà'}</p>
+              <p>• <strong>Bên thuê (Bên B):</strong> {contractTenant?.fullName || '—'} (CCCD: {contractTenant?.idCardNumber || '—'})</p>
               <p>• <strong>Phòng thuê:</strong> Căn {contractRoom?.roomNumber || termRoomId}, Tòa nhà GreenHouse</p>
               <p>• <strong>Thời hạn hợp đồng:</strong> {termDuration} tháng ({termStart} → {termEnd})</p>
               <p>• <strong>Giá thuê:</strong> {termRent.toLocaleString()} VNĐ/tháng (Thanh toán trả trước)</p>
@@ -615,7 +628,12 @@ export const ContractScreens: React.FC = () => {
   if (currentScreenId === 'CONTRACT_SIGN') {
     const handleSignSubmit = (e: React.FormEvent) => {
       e.preventDefault();
-      signContract(currentContract.id, signDate, paperProofUrl);
+      setFormError(null);
+      const result = signContract(currentContract.id, signDate, paperProofUrl);
+      if (!result.success) {
+        setFormError(result.error || 'Chưa ghi nhận được hợp đồng đã ký.');
+        return;
+      }
       // Cross-link 14 to ROOM_FIRSTPAY
       navigate('ROOM_FIRSTPAY', { roomId: currentContract.roomId, contractId: currentContract.id });
     };
@@ -637,6 +655,7 @@ export const ContractScreens: React.FC = () => {
           </div>
 
           <form onSubmit={handleSignSubmit} className="space-y-3">
+            {formError && <p className="rounded-lg border border-rose-200 bg-rose-50 p-2 text-rose-800">{formError}</p>}
             <div>
               <label className="block font-bold text-slate-700 mb-1">Ngày hai bên ký giấy</label>
               <input
@@ -679,7 +698,12 @@ export const ContractScreens: React.FC = () => {
   if (currentScreenId === 'CONTRACT_RENEW') {
     const handleCreateRenew = (e: React.FormEvent) => {
       e.preventDefault();
+      setFormError(null);
       const res = renewContract(currentContract.id, renewMonths, renewStartDate, renewEndDate);
+      if (!res.success) {
+        setFormError(res.error || 'Chưa lập được hợp đồng nối tiếp.');
+        return;
+      }
       navigate('CONTRACT_RENEW_SIGN', { contractId: res.contractId, roomId: currentContract.roomId });
     };
 
@@ -703,6 +727,7 @@ export const ContractScreens: React.FC = () => {
           </div>
 
           <form onSubmit={handleCreateRenew} className="space-y-3">
+            {formError && <p className="rounded-lg border border-rose-200 bg-rose-50 p-2 text-rose-800">{formError}</p>}
             <div>
               <label className="block font-bold text-slate-700 mb-1">Thời hạn gia hạn (Tháng)</label>
               <input
@@ -768,7 +793,12 @@ export const ContractScreens: React.FC = () => {
   if (currentScreenId === 'CONTRACT_RENEW_SIGN') {
     const handleRenewSignSubmit = (e: React.FormEvent) => {
       e.preventDefault();
-      signRenewContract(currentContract.id, signDate, paperProofUrl);
+      setFormError(null);
+      const result = signRenewContract(currentContract.id, signDate, paperProofUrl);
+      if (!result.success) {
+        setFormError(result.error || 'Chưa ghi nhận được hợp đồng nối tiếp đã ký.');
+        return;
+      }
       // Cross-link 26 to ROOM_RENEW_CHECK
       navigate('ROOM_RENEW_CHECK', { roomId: currentContract.roomId, contractId: currentContract.id });
     };
@@ -787,6 +817,7 @@ export const ContractScreens: React.FC = () => {
           </div>
 
           <form onSubmit={handleRenewSignSubmit} className="space-y-3">
+            {formError && <p className="rounded-lg border border-rose-200 bg-rose-50 p-2 text-rose-800">{formError}</p>}
             <div>
               <label className="block font-bold text-slate-700 mb-1">Ngày ký hợp đồng nối tiếp</label>
               <input

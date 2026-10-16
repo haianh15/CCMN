@@ -29,38 +29,54 @@ export const ReturnScreens: React.FC = () => {
     tenants,
     assetItems,
     checkoutProtocols,
+    meterReadings,
     depositSettlements,
     createCheckoutDraft,
     confirmActualReturn305,
     markReturnPending,
     saveAssetComparison,
     signCheckoutFinalProtocol,
-    verifyReturnAndFreeRoom
+    verifyReturnAndFreeRoom,
+    showToast
   } = useApp();
 
   const targetRoomId = params.roomId as string | undefined;
   const currentRoom = (targetRoomId ? rooms.find(r => r.id === targetRoomId) : undefined)!;
   const currentTenant = tenants.find(t => t.id === currentRoom?.currentTenantId);
-  const currentProtocol = checkoutProtocols.find(p => p.roomId === currentRoom?.id);
-  const roomAssets = assetItems.filter(item => item.roomId === currentRoom?.id);
-  const currentSettlement = depositSettlements.find(s => s.roomId === currentRoom?.id);
+  const currentProtocol = checkoutProtocols.find(p => p.roomId === currentRoom?.id && p.rentalId === currentRoom?.currentRentalId);
+  const latestMeterReading = meterReadings
+    .filter(reading => reading.roomId === currentRoom?.id && reading.rentalId === currentRoom?.currentRentalId)
+    .sort((a, b) => a.periodId.localeCompare(b.periodId))
+    .at(-1);
+  const roomAssets = assetItems.filter(item => item.roomId === currentRoom?.id && item.rentalId === currentRoom?.currentRentalId);
+  const currentSettlement = depositSettlements.find(s => s.roomId === currentRoom?.id && s.rentalId === currentRoom?.currentRentalId);
 
   // RETURN_ACTUAL form
-  const [electricFinal, setElectricFinal] = useState<number>(currentProtocol?.finalElectricNumber || 1540);
-  const [waterFinal, setWaterFinal] = useState<number>(currentProtocol?.finalWaterNumber || 88);
+  const [electricFinal, setElectricFinal] = useState<number>(currentProtocol?.finalElectricNumber ?? latestMeterReading?.electricNew ?? 0);
+  const [waterFinal, setWaterFinal] = useState<number>(currentProtocol?.finalWaterNumber ?? latestMeterReading?.waterNew ?? 0);
 
   // RETURN_PENDING form
-  const [pendingReasonText, setPendingReasonText] = useState(currentProtocol?.pendingReason || 'Khách chưa dọn sạch tủ đồ và thiếu 1 chìa khóa phụ + 1 thẻ từ');
+  const [pendingReasonText, setPendingReasonText] = useState(currentProtocol?.pendingReason || '');
 
   // RETURN_COMPARE differences
-  const [damageAmount, setDamageAmount] = useState<number>(400000);
-  const [damageNotes, setDamageNotes] = useState('Hỏng tay gạt cửa ban công (250k) + Mất 1 thẻ từ thang máy (150k)');
+  const [assetDifferences, setAssetDifferences] = useState<Record<string, { difference: string; amount: number; damaged: boolean }>>(() =>
+    Object.fromEntries(roomAssets.map(item => [item.id, {
+      difference: item.difference || '',
+      amount: item.compensationAmount || 0,
+      damaged: Boolean(item.isDamagedOrMissing)
+    }]))
+  );
 
   // RETURN_FINAL form
-  const [finalPaperProof, setFinalPaperProof] = useState(currentProtocol?.paperProofUrl || 'https://images.unsplash.com/photo-1450133064473-71024230f91b?auto=format&fit=crop&w=400&q=80');
+  const [finalPaperProof, setFinalPaperProof] = useState('');
+  const [finalError, setFinalError] = useState<string | null>(null);
+  const [unmetList, setUnmetList] = useState<string[]>([]);
 
   if (!targetRoomId || !rooms.some(room => room.id === targetRoomId)) {
     return <MissingRecord title="Quy trình trả phòng" message="Phòng được chọn không còn tồn tại." backTo="ROOMS" />;
+  }
+  if (!currentRoom?.currentRentalId || !currentRoom.currentTenantId) {
+    return <MissingRecord title="Quy trình trả phòng" message="Phòng chưa có lượt thuê đang hoạt động để trả." backTo="ROOMS" />;
   }
 
   // 1. RETURN Stepper Screen (F.8)
@@ -69,7 +85,7 @@ export const ReturnScreens: React.FC = () => {
       { id: 1, name: 'Biên bản trả phòng nháp', screenId: 'RETURN_DRAFT' as const, done: !!currentProtocol },
       { id: 2, name: 'Nhận lại thực tế (Mốc 3.05)', screenId: 'RETURN_ACTUAL' as const, done: !!currentProtocol?.actualReturnConfirmed },
       { id: 3, name: 'Đối chiếu tài sản', screenId: 'RETURN_COMPARE' as const, done: !!currentProtocol?.actualReturnConfirmed },
-      { id: 4, name: 'Đối soát cọc trong biên bản', screenId: 'RETURN_DEPOSIT' as const, done: currentSettlement?.status === 'DA_CHOT_HOAN_TIEN' },
+      { id: 4, name: 'Đối soát cọc trong biên bản', screenId: 'RETURN_DEPOSIT' as const, done: currentSettlement?.status === 'DA_CHOT_HOAN_TIEN' || currentSettlement?.status === 'DA_CHOT_THU_THEM' },
       { id: 5, name: 'Hoàn thiện biên bản giấy', screenId: 'RETURN_FINAL' as const, done: !!currentProtocol?.paperProtocolSigned },
       { id: 6, name: 'Kiểm tra & Giải phóng phòng', screenId: 'RETURN_CHECK' as const, done: currentRoom.status === 'TRONG' }
     ];
@@ -129,7 +145,8 @@ export const ReturnScreens: React.FC = () => {
   // 2. RETURN_DRAFT Screen (F.8 - Cross-link 30)
   if (currentScreenId === 'RETURN_DRAFT') {
     const handleStartDraft = () => {
-      createCheckoutDraft(currentRoom.id);
+      const result = createCheckoutDraft(currentRoom.id);
+      if (!result.success) return;
       // Cross-link 30 to RETURN_ACTUAL
       navigate('RETURN_ACTUAL', { roomId: currentRoom.id });
     };
@@ -173,7 +190,11 @@ export const ReturnScreens: React.FC = () => {
   // 3. RETURN_ACTUAL Screen (F.8 - Cross-links 31, 37)
   if (currentScreenId === 'RETURN_ACTUAL') {
     const handleConfirmActual = () => {
-      confirmActualReturn305(currentRoom.id, Number(electricFinal), Number(waterFinal));
+      const result = confirmActualReturn305(currentRoom.id, Number(electricFinal), Number(waterFinal));
+      if (!result.success) {
+        showToast(result.error || 'Chưa ghi nhận được chỉ số trả phòng.');
+        return;
+      }
       // Cross-link 31 to RETURN_COMPARE
       navigate('RETURN_COMPARE', { roomId: currentRoom.id });
     };
@@ -242,7 +263,8 @@ export const ReturnScreens: React.FC = () => {
   if (currentScreenId === 'RETURN_PENDING') {
     const handleSavePending = (e: React.FormEvent) => {
       e.preventDefault();
-      markReturnPending(currentRoom.id, pendingReasonText);
+      const result = markReturnPending(currentRoom.id, pendingReasonText);
+      if (!result.success) showToast(result.error || 'Chưa ghi nhận được vướng mắc.');
     };
 
     return (
@@ -298,6 +320,23 @@ export const ReturnScreens: React.FC = () => {
 
   // 5. RETURN_COMPARE Screen (F.8 - Cross-links 32, 38)
   if (currentScreenId === 'RETURN_COMPARE') {
+    const handleSaveComparison = () => {
+      const differences = roomAssets.map(item => ({
+        id: item.id,
+        difference: assetDifferences[item.id]?.difference || '',
+        compAmount: assetDifferences[item.id]?.amount || 0,
+        isDamaged: assetDifferences[item.id]?.damaged || false
+      }));
+      if (differences.some(item => item.isDamaged && !item.difference.trim())) {
+        showToast('Hãy mô tả từng tài sản hỏng hoặc bị thiếu.');
+        return;
+      }
+      saveAssetComparison(currentRoom.id, differences);
+      const damagedItems = differences.filter(item => item.isDamaged);
+      const amount = damagedItems.reduce((total, item) => total + item.compAmount, 0);
+      const notes = damagedItems.map(item => item.difference).join('; ');
+      navigate('RETURN_COMPARE_RESULT', { roomId: currentRoom.id, damageAmount: amount, damageNotes: notes });
+    };
     return (
       <div className="flex-1 flex flex-col p-4 bg-slate-50 space-y-3">
         <AppHeader
@@ -334,13 +373,49 @@ export const ReturnScreens: React.FC = () => {
                     • Phát hiện lúc trả: <strong>{item.difference}</strong>
                   </div>
                 )}
+                <label className="flex items-center gap-2 pt-1 text-[11px]">
+                  <input
+                    type="checkbox"
+                    checked={assetDifferences[item.id]?.damaged || false}
+                    onChange={event => setAssetDifferences(prev => ({
+                      ...prev,
+                      [item.id]: { ...prev[item.id], damaged: event.target.checked }
+                    }))}
+                  />
+                  Có hư hỏng hoặc thất lạc
+                </label>
+                {assetDifferences[item.id]?.damaged && (
+                  <div className="grid grid-cols-2 gap-2">
+                    <input
+                      type="text"
+                      value={assetDifferences[item.id]?.difference || ''}
+                      onChange={event => setAssetDifferences(prev => ({
+                        ...prev,
+                        [item.id]: { ...prev[item.id], difference: event.target.value, damaged: true }
+                      }))}
+                      placeholder="Mô tả hư hỏng / thất lạc"
+                      className="rounded-lg border border-slate-300 px-2 py-1.5"
+                    />
+                    <input
+                      type="number"
+                      min={0}
+                      value={assetDifferences[item.id]?.amount || 0}
+                      onChange={event => setAssetDifferences(prev => ({
+                        ...prev,
+                        [item.id]: { ...prev[item.id], amount: Number(event.target.value), damaged: true }
+                      }))}
+                      aria-label={`Mức khấu trừ ${item.assetName}`}
+                      className="rounded-lg border border-slate-300 px-2 py-1.5"
+                    />
+                  </div>
+                )}
               </div>
             ))}
           </div>
 
           <div className="pt-2">
             <button
-              onClick={() => navigate('RETURN_COMPARE_RESULT', { roomId: currentRoom.id })}
+              onClick={handleSaveComparison}
               className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-xs flex items-center justify-center space-x-2 shadow-md cursor-pointer"
             >
               <span>Xem Kết Quả Đối Chiếu & Bồi Thường</span>
@@ -354,6 +429,13 @@ export const ReturnScreens: React.FC = () => {
 
   // 6. RETURN_COMPARE_RESULT Screen (F.8 - Cross-link 32)
   if (currentScreenId === 'RETURN_COMPARE_RESULT') {
+    const damageAmount = Number(params.damageAmount ?? roomAssets.reduce((sum, item) =>
+      item.isDamagedOrMissing ? sum + (item.compensationAmount || 0) : sum, 0
+    ));
+    const damageNotes = String(params.damageNotes ?? roomAssets
+      .filter(item => item.isDamagedOrMissing)
+      .map(item => item.difference || item.assetName)
+      .join('; '));
     const handleProceedToDeposit = () => {
       // Cross-link 32 to DEPOSIT_NEW
       navigate('DEPOSIT_NEW', { roomId: currentRoom.id, damageAmount, damageNotes });
@@ -397,6 +479,8 @@ export const ReturnScreens: React.FC = () => {
 
   // 7. RETURN_DEPOSIT Screen (F.8 - Cross-links 34, 39)
   if (currentScreenId === 'RETURN_DEPOSIT') {
+    const settlementFinalized = currentSettlement &&
+      ['DA_CHOT_HOAN_TIEN', 'DA_CHOT_THU_THEM'].includes(currentSettlement.status);
     return (
       <div className="flex-1 flex flex-col p-4 bg-slate-50 space-y-3">
         <AppHeader
@@ -418,19 +502,27 @@ export const ReturnScreens: React.FC = () => {
           <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-1.5 font-mono">
             <div className="flex justify-between">
               <span className="text-slate-600 font-sans">Tiền cọc gốc (1 tháng):</span>
-              <strong className="text-slate-900">4.600.000 VNĐ</strong>
+              <strong className="text-slate-900">{currentSettlement?.originalDeposit.toLocaleString() || '—'} VNĐ</strong>
             </div>
             <div className="flex justify-between">
               <span className="text-slate-600 font-sans">Điện nước kỳ cuối:</span>
-              <span className="text-slate-900">- 520.000 VNĐ</span>
+              <span className="text-slate-900">- {currentSettlement?.finalServiceObligation.toLocaleString() || '—'} VNĐ</span>
             </div>
             <div className="flex justify-between">
               <span className="text-slate-600 font-sans">Khấu trừ hư hỏng tài sản:</span>
-              <span className="text-rose-700">- 400.000 VNĐ</span>
+              <span className="text-rose-700">- {currentSettlement?.assetDamageDeduction.toLocaleString() || '—'} VNĐ</span>
             </div>
             <div className="flex justify-between pt-1 border-t border-slate-200 text-sm font-bold font-sans">
-              <span>SỐ TIỀN HOÀN CỌC CHỐT:</span>
-              <span className="font-mono text-emerald-700">3.680.000 VNĐ</span>
+              <span>KẾT QUẢ QUYẾT TOÁN:</span>
+              <span className={`font-mono ${currentSettlement && currentSettlement.netRefundAmount < 0 ? 'text-rose-700' : 'text-emerald-700'}`}>
+                {currentSettlement
+                  ? currentSettlement.netRefundAmount > 0
+                    ? `Hoàn ${currentSettlement.netRefundAmount.toLocaleString()} VNĐ`
+                    : currentSettlement.netRefundAmount < 0
+                      ? `Thu thêm ${Math.abs(currentSettlement.netRefundAmount).toLocaleString()} VNĐ`
+                      : 'Đối trừ đủ'
+                  : 'Chưa lập'}
+              </span>
             </div>
           </div>
 
@@ -438,7 +530,8 @@ export const ReturnScreens: React.FC = () => {
             {/* Link 34 to RETURN_FINAL */}
             <button
               onClick={() => navigate('RETURN_FINAL', { roomId: currentRoom.id })}
-              className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-xs flex items-center justify-center space-x-2 shadow-md cursor-pointer"
+              disabled={!settlementFinalized}
+              className="w-full py-3 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white font-bold rounded-xl text-xs flex items-center justify-center space-x-2 shadow-md cursor-pointer"
             >
               <span>Kiểm Tra Cọc Xong → Hoàn Thiện Biên Bản Giấy</span>
               <ArrowRight className="w-4 h-4" />
@@ -463,7 +556,12 @@ export const ReturnScreens: React.FC = () => {
   // 8. RETURN_FINAL Screen (F.8 - Cross-link 35)
   if (currentScreenId === 'RETURN_FINAL') {
     const handleSignFinal = () => {
-      signCheckoutFinalProtocol(currentRoom.id, finalPaperProof);
+      setFinalError(null);
+      const result = signCheckoutFinalProtocol(currentRoom.id, finalPaperProof);
+      if (!result.success) {
+        setFinalError(result.error || 'Chưa hoàn thiện được biên bản trả phòng.');
+        return;
+      }
       // Cross-link 35 to RETURN_CHECK
       navigate('RETURN_CHECK', { roomId: currentRoom.id });
     };
@@ -477,6 +575,7 @@ export const ReturnScreens: React.FC = () => {
         />
 
         <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-xs space-y-3 text-xs">
+          {finalError && <p className="rounded-lg border border-rose-200 bg-rose-50 p-2 text-rose-800">{finalError}</p>}
           <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-1">
             <strong className="block font-bold text-slate-900">Xác nhận ký biên bản thanh lý giấy:</strong>
             <p className="text-slate-600">
@@ -485,10 +584,15 @@ export const ReturnScreens: React.FC = () => {
           </div>
 
           <div>
-            <label className="block font-bold text-slate-700 mb-1">Ảnh chụp biên bản trả phòng hoàn chỉnh</label>
-            <div className="h-32 rounded-xl overflow-hidden border border-slate-200 relative">
-              <img src={finalPaperProof} alt="Biên bản trả" className="w-full h-full object-cover" />
-            </div>
+            <label className="block font-bold text-slate-700 mb-1">Mã chứng từ hoặc đường dẫn biên bản đã ký</label>
+            <input
+              type="text"
+              value={finalPaperProof}
+              onChange={event => setFinalPaperProof(event.target.value)}
+              required
+              className="w-full rounded-xl border border-slate-300 px-3 py-2"
+              placeholder="Nhập mã chứng từ hoặc đường dẫn tệp"
+            />
           </div>
 
           <div className="pt-2">
@@ -507,8 +611,6 @@ export const ReturnScreens: React.FC = () => {
 
   // 9. RETURN_CHECK Screen (F.8 - Cross-link 36)
   if (currentScreenId === 'RETURN_CHECK') {
-    const [unmetList, setUnmetList] = useState<string[]>([]);
-
     const handleVerifyAndFree = () => {
       const res = verifyReturnAndFreeRoom(currentRoom.id);
       if (res.success) {
@@ -547,15 +649,21 @@ export const ReturnScreens: React.FC = () => {
           <div className="space-y-2">
             <div className="p-2.5 rounded-xl border border-slate-200 bg-slate-50 flex items-center justify-between">
               <span>1. Xác nhận nhận lại thực tế (3.05):</span>
-              <span className="font-bold text-emerald-600">✓ Đạt</span>
+              <span className={`font-bold ${currentProtocol?.actualReturnConfirmed ? 'text-emerald-600' : 'text-rose-600'}`}>
+                {currentProtocol?.actualReturnConfirmed ? '✓ Đạt' : 'Chưa xác nhận'}
+              </span>
             </div>
             <div className="p-2.5 rounded-xl border border-slate-200 bg-slate-50 flex items-center justify-between">
               <span>2. Quyết toán cọc:</span>
-              <span className="font-bold text-emerald-600">✓ Đã chốt</span>
+              <span className={`font-bold ${currentSettlement && ['DA_CHOT_HOAN_TIEN', 'DA_CHOT_THU_THEM'].includes(currentSettlement.status) ? 'text-emerald-600' : 'text-rose-600'}`}>
+                {currentSettlement && ['DA_CHOT_HOAN_TIEN', 'DA_CHOT_THU_THEM'].includes(currentSettlement.status) ? '✓ Đã chốt' : 'Chưa chốt'}
+              </span>
             </div>
             <div className="p-2.5 rounded-xl border border-slate-200 bg-slate-50 flex items-center justify-between">
               <span>3. Ký biên bản thanh lý giấy:</span>
-              <span className="font-bold text-emerald-600">✓ Đầy đủ</span>
+              <span className={`font-bold ${currentProtocol?.paperProtocolSigned ? 'text-emerald-600' : 'text-rose-600'}`}>
+                {currentProtocol?.paperProtocolSigned ? '✓ Đầy đủ' : 'Chưa ký'}
+              </span>
             </div>
           </div>
 

@@ -186,6 +186,17 @@ export interface Contract {
   updatedAt: string;
 }
 
+export interface InitialPayment {
+  id: string;
+  contractId: string;
+  roomId: string;
+  tenantId: string;
+  amount: number;
+  bankTransactionRef: string;
+  receivedDate: string;
+  confirmedBy: string;
+}
+
 export interface AssetInventoryItem {
   id: string;
   roomId: string;
@@ -219,6 +230,7 @@ export interface AssetHandoverProtocol {
   contractId: string;
   date: string;
   paperHandoverSigned: boolean;
+  keysCardsHandedOver?: boolean;
   paperProofUrl?: string;
   notes?: string;
   status: 'NHAP' | 'DA_KY';

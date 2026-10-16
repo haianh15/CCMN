@@ -44,30 +44,44 @@ export const DepositScreens: React.FC = () => {
   const settlementTenant = tenants.find(t => t.id === currentSettlement?.tenantId);
   const defaultSettlementRoom = rooms.find(room =>
     checkoutProtocols.some(protocol => protocol.roomId === room.id && protocol.actualReturnConfirmed) &&
-    !depositSettlements.some(settlement => settlement.roomId === room.id)
-  ) || rooms.find(room => room.status === 'CHUA_BAN_GIAO_XONG') || rooms.find(room => room.status === 'SAP_TRA');
-  const initialDepositRoom = rooms.find(room => room.id === params.roomId) || defaultSettlementRoom || rooms[0];
-  const initialDepositContract = contracts.find(contract => contract.roomId === initialDepositRoom?.id);
+    !depositSettlements.some(settlement => settlement.rentalId === room.currentRentalId)
+  );
+  const initialDepositRoom = rooms.find(room => room.id === params.roomId && checkoutProtocols.some(protocol =>
+    protocol.roomId === room.id && protocol.actualReturnConfirmed
+  )) || defaultSettlementRoom;
+  const initialDepositContract = contracts.find(contract =>
+    contract.id === initialDepositRoom?.currentContractId && contract.rentalId === initialDepositRoom?.currentRentalId
+  );
 
   // DEPOSIT_NEW form
   const [depRoomId, setDepRoomId] = useState((params.roomId as string | undefined) || initialDepositRoom?.id || '');
-  const [depOriginal, setDepOriginal] = useState<number>(initialDepositContract?.depositAmount || initialDepositRoom?.basePrice || 0);
+  const [depOriginal, setDepOriginal] = useState<number>(initialDepositContract?.depositAmount || 0);
   const [depRentDue, setDepRentDue] = useState<number>(0);
   const [depServiceDue, setDepServiceDue] = useState<number>(Number(params.serviceAmount) || 0);
   const [depDamage, setDepDamage] = useState<number>(Number(params.damageAmount) || 0);
   const [depDamageNotes, setDepDamageNotes] = useState((params.damageNotes as string) || '');
   const selectedDepositRoom = rooms.find(room => room.id === depRoomId);
-  const selectedDepositContract = contracts.find(contract => contract.roomId === depRoomId);
+  const selectedDepositContract = contracts.find(contract =>
+    contract.id === selectedDepositRoom?.currentContractId && contract.rentalId === selectedDepositRoom?.currentRentalId
+  );
   const selectedDepositTenant = tenants.find(tenant =>
     tenant.id === selectedDepositRoom?.currentTenantId || tenant.id === selectedDepositContract?.tenantId
   );
 
   // DEPOSIT_FINAL form
-  const [finalProof, setFinalProof] = useState('https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?auto=format&fit=crop&w=400&q=80');
-  const [finalMethod, setFinalMethod] = useState<DepositSettlement['paymentMethod']>('CHUYEN_KHOAN_HOAN_COC');
+  const [finalProof, setFinalProof] = useState('');
+  const [finalMethod, setFinalMethod] = useState<DepositSettlement['paymentMethod']>(
+    currentSettlement?.netRefundAmount > 0
+      ? 'CHUYEN_KHOAN_HOAN_COC'
+      : currentSettlement?.netRefundAmount < 0 ? 'THU_THEM_TIEN' : 'DOI_TRU'
+  );
+  const [finalError, setFinalError] = useState<string | null>(null);
 
   if (targetSettlementId && !depositSettlements.some(settlement => settlement.id === targetSettlementId)) {
     return <MissingRecord title="Chi tiết quyết toán cọc" message="Quyết toán được chọn không còn tồn tại." backTo="DEPOSIT" />;
+  }
+  if (currentScreenId === 'DEPOSIT_NEW' && !depRoomId) {
+    return <MissingRecord title="Lập quyết toán cọc" message="Chưa có lượt trả phòng đã xác nhận thực tế để quyết toán." backTo="DEPOSIT" />;
   }
   if (settlementRequired && !currentSettlement) {
     return <MissingRecord title="Chi tiết quyết toán cọc" message="Chưa có dữ liệu quyết toán cọc cho luồng này." backTo="DEPOSIT" />;
@@ -137,7 +151,7 @@ export const DepositScreens: React.FC = () => {
 
   // 2. DEPOSIT_NEW Screen (F.11)
   if (currentScreenId === 'DEPOSIT_NEW') {
-    const netRefund = Math.max(0, depOriginal - depRentDue - depServiceDue - depDamage);
+    const netRefund = depOriginal - depRentDue - depServiceDue - depDamage;
 
     const handleSaveNewSettlement = (e: React.FormEvent) => {
       e.preventDefault();
@@ -162,7 +176,7 @@ export const DepositScreens: React.FC = () => {
         status: 'NHAP',
         amendmentHistory: []
       });
-      navigate('DEPOSIT_DETAIL', { settlementId: res.settlementId, roomId: depRoomId });
+      if (res.success) navigate('DEPOSIT_DETAIL', { settlementId: res.settlementId, roomId: depRoomId });
     };
 
     return (
@@ -181,9 +195,11 @@ export const DepositScreens: React.FC = () => {
                 value={depRoomId}
                 onChange={e => {
                   const room = rooms.find(item => item.id === e.target.value);
-                  const contract = contracts.find(item => item.roomId === e.target.value);
+                  const contract = room?.currentContractId
+                    ? contracts.find(item => item.id === room.currentContractId)
+                    : undefined;
                   setDepRoomId(e.target.value);
-                  setDepOriginal(contract?.depositAmount || room?.basePrice || 0);
+                  setDepOriginal(contract?.depositAmount || 0);
                   setDepRentDue(0);
                   setDepServiceDue(0);
                   setDepDamage(0);
@@ -193,7 +209,10 @@ export const DepositScreens: React.FC = () => {
                 className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white"
               >
                 <option value="" disabled>Chọn phòng</option>
-                {rooms.map(room => <option key={room.id} value={room.id}>Phòng {room.roomNumber}</option>)}
+                {rooms.filter(room =>
+                  checkoutProtocols.some(protocol => protocol.roomId === room.id && protocol.actualReturnConfirmed) &&
+                  !depositSettlements.some(settlement => settlement.rentalId === room.currentRentalId)
+                ).map(room => <option key={room.id} value={room.id}>Phòng {room.roomNumber}</option>)}
               </select>
               {!selectedDepositTenant || !selectedDepositContract ? (
                 <p className="mt-1 text-[11px] text-amber-700">Phòng này chưa có khách thuê hoặc hợp đồng để đối soát.</p>
@@ -256,9 +275,9 @@ export const DepositScreens: React.FC = () => {
             {/* Calculated Net Refund */}
             <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-950 flex justify-between items-center">
               <div>
-                <div className="text-[10px] text-emerald-700 uppercase font-bold">Số tiền hoàn lại cho khách</div>
-                <div className="text-base font-extrabold font-mono text-emerald-800 mt-0.5">
-                  {netRefund.toLocaleString()} VNĐ
+                <div className="text-[10px] text-emerald-700 uppercase font-bold">Kết quả dự kiến</div>
+                <div className={`text-base font-extrabold font-mono mt-0.5 ${netRefund < 0 ? 'text-rose-800' : 'text-emerald-800'}`}>
+                  {netRefund > 0 ? `Hoàn ${netRefund.toLocaleString()} đ` : netRefund < 0 ? `Thu thêm ${Math.abs(netRefund).toLocaleString()} đ` : 'Đối trừ đủ'}
                 </div>
               </div>
               <span className="text-[10px] bg-emerald-200 text-emerald-800 font-semibold px-2 py-0.5 rounded">
@@ -297,8 +316,12 @@ export const DepositScreens: React.FC = () => {
                 <span className="text-[10px] text-slate-400 font-mono">Bên thuê</span>
                 <div className="font-bold text-slate-900 text-sm">{settlementTenant?.fullName}</div>
               </div>
-              <span className="font-mono font-bold text-emerald-700 text-sm">
-                Hoàn trả: {currentSettlement.netRefundAmount.toLocaleString()} đ
+              <span className={`font-mono font-bold text-sm ${currentSettlement.netRefundAmount < 0 ? 'text-rose-700' : 'text-emerald-700'}`}>
+                {currentSettlement.netRefundAmount > 0
+                  ? `Hoàn: ${currentSettlement.netRefundAmount.toLocaleString()} đ`
+                  : currentSettlement.netRefundAmount < 0
+                    ? `Thu thêm: ${Math.abs(currentSettlement.netRefundAmount).toLocaleString()} đ`
+                    : 'Đối trừ đủ'}
               </span>
             </div>
 
@@ -349,7 +372,12 @@ export const DepositScreens: React.FC = () => {
   if (currentScreenId === 'DEPOSIT_FINAL') {
     const handleFinalize = (e: React.FormEvent) => {
       e.preventDefault();
-      finalizeDepositSettlement(currentSettlement.id, finalProof, finalMethod);
+      setFinalError(null);
+      const result = finalizeDepositSettlement(currentSettlement.id, finalProof, finalMethod);
+      if (!result.success) {
+        setFinalError('Chưa ghi nhận được kết quả. Kiểm tra phương thức và chứng từ.');
+        return;
+      }
       // Cross-link 33 to RETURN_DEPOSIT
       navigate('RETURN_DEPOSIT', { roomId: currentSettlement.roomId });
     };
@@ -366,11 +394,12 @@ export const DepositScreens: React.FC = () => {
           <div className="p-3 bg-blue-50 border border-blue-200 text-blue-900 rounded-xl space-y-1">
             <strong className="block font-bold">Quy tắc ghi nhận hoàn cọc:</strong>
             <p>
-              Chỉ chốt khi đã thực hiện chuyển khoản hoàn tiền hoặc thu thêm có chứng từ sao kê ngoài đời thực. Hệ thống không tự động chuyển khoản tiền ngân hàng.
+              Chỉ chốt sau khi đã hoàn tiền, thu thêm hoặc đối trừ thực tế và ghi lại căn cứ. Hệ thống không tự chuyển tiền.
             </p>
           </div>
 
           <form onSubmit={handleFinalize} className="space-y-3">
+            {finalError && <p className="rounded-lg border border-rose-200 bg-rose-50 p-2 text-rose-800">{finalError}</p>}
             <div>
               <label className="block font-bold text-slate-700 mb-1">Phương thức thực hiện</label>
               <select
@@ -378,14 +407,14 @@ export const DepositScreens: React.FC = () => {
                 onChange={e => setFinalMethod(e.target.value as any)}
                 className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white"
               >
-                <option value="CHUYEN_KHOAN_HOAN_COC">Chuyển khoản hoàn cọc lại cho khách</option>
-                <option value="DOI_TRU">Đối trừ hết vào tiền nhà/dịch vụ</option>
-                <option value="THU_THEM_TIEN">Thu thêm tiền do hư hại vượt tiền cọc</option>
+                {currentSettlement.netRefundAmount > 0 && <option value="CHUYEN_KHOAN_HOAN_COC">Chuyển khoản hoàn cọc cho khách</option>}
+                {currentSettlement.netRefundAmount === 0 && <option value="DOI_TRU">Đối trừ đủ các khoản</option>}
+                {currentSettlement.netRefundAmount < 0 && <option value="THU_THEM_TIEN">Thu thêm tiền còn thiếu</option>}
               </select>
             </div>
 
             <div>
-              <label className="block font-bold text-slate-700 mb-1">Ảnh sao kê / Chứng từ chuyển tiền hoàn cọc</label>
+              <label className="block font-bold text-slate-700 mb-1">Mã chứng từ hoặc căn cứ đã hoàn/thu/đối trừ</label>
               <input
                 type="text"
                 value={finalProof}

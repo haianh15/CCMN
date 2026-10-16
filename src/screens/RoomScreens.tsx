@@ -36,6 +36,8 @@ export const RoomScreens: React.FC = () => {
     rooms,
     tenants,
     contracts,
+    initialPayments,
+    handoverProtocols,
     checkoutPlans,
     assetItems,
     createRoom,
@@ -54,8 +56,14 @@ export const RoomScreens: React.FC = () => {
     ? rooms.find(r => r.id === targetRoomId)
     : roomRequired ? undefined : rooms[0])!;
   const currentTenant = tenants.find(t => t.id === currentRoom?.currentTenantId);
-  const currentContract = contracts.find(c => c.roomId === currentRoom?.id && (c.status === 'HIEU_LUC' || c.status === 'DA_KY' || c.status === 'NHAP'));
-  const currentPlan = checkoutPlans.find(p => p.roomId === currentRoom?.id);
+  const currentContract = contracts.find(c => c.id === currentRoom?.currentContractId) ||
+    contracts.filter(c => c.roomId === currentRoom?.id && ['DA_KY', 'NHAP', 'HIEU_LUC'].includes(c.status))
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
+  const currentInitialPayment = initialPayments.find(payment => payment.contractId === currentContract?.id);
+  const currentHandover = handoverProtocols.find(protocol =>
+    protocol.contractId === currentContract?.id && protocol.paperHandoverSigned && protocol.keysCardsHandedOver
+  );
+  const currentPlan = checkoutPlans.find(p => p.roomId === currentRoom?.id && p.status === 'DANG_CHO');
 
   // Search & filter state for ROOMS list
   const [searchTerm, setSearchTerm] = useState('');
@@ -64,9 +72,9 @@ export const RoomScreens: React.FC = () => {
 
   // ROOM_NEW form state
   const [newRoomNumber, setNewRoomNumber] = useState('');
-  const [newFloor, setNewFloor] = useState<number>(1);
-  const [newArea, setNewArea] = useState<number>(28);
-  const [newPrice, setNewPrice] = useState<number>(4500000);
+  const [newFloor, setNewFloor] = useState<number>(0);
+  const [newArea, setNewArea] = useState<number>(0);
+  const [newPrice, setNewPrice] = useState<number>(0);
   const [newNote, setNewNote] = useState('');
   const [newRoomError, setNewRoomError] = useState<string | null>(null);
 
@@ -77,18 +85,18 @@ export const RoomScreens: React.FC = () => {
   const [editNote, setEditNote] = useState(currentRoom?.note || '');
 
   // ROOM_FIRSTPAY form state
-  const [payAmount, setPayAmount] = useState<number>(currentRoom?.basePrice ? currentRoom.basePrice * 2 : 9000000);
-  const [bankRefCode, setBankRefCode] = useState('MB-CK261014589');
+  const [payAmount, setPayAmount] = useState<number>((currentContract?.depositAmount || 0) + (currentContract?.firstMonthRent || 0));
+  const [bankRefCode, setBankRefCode] = useState('');
   const [firstPayError, setFirstPayError] = useState<string | null>(null);
 
   // ROOM_PLAN_NEW form state
-  const [planDate, setPlanDate] = useState('28/10/2026');
+  const [planDate, setPlanDate] = useState('');
   const [planChannel, setPlanChannel] = useState<'ZALO' | 'DIEN_THOAI' | 'TRUC_TIEP'>('ZALO');
-  const [planNotes, setPlanNotes] = useState('Khách báo trước chuyển công tác vào TP.HCM');
+  const [planNotes, setPlanNotes] = useState('');
 
   // ROOM_PLAN_EDIT form state
-  const [planEditDate, setPlanEditDate] = useState(currentPlan?.plannedDate || '30/10/2026');
-  const [planEditReason, setPlanEditReason] = useState('Khách xin lùi lại 2 ngày để kịp dọn đồ cá nhân');
+  const [planEditDate, setPlanEditDate] = useState(currentPlan?.plannedDate || '');
+  const [planEditReason, setPlanEditReason] = useState('');
 
   // ROOM_PLAN_FEED form state
   const [feedChannel, setFeedChannel] = useState('Zalo');
@@ -695,6 +703,9 @@ export const RoomScreens: React.FC = () => {
 
   // 6. ROOM_IN Screen (F.4 - Cross-links 18, 19)
   if (currentScreenId === 'ROOM_IN') {
+    const hasSignedContract = currentContract?.status === 'DA_KY' || currentContract?.status === 'HIEU_LUC';
+    const hasConfirmedPayment = Boolean(currentInitialPayment);
+    const hasSignedHandover = Boolean(currentHandover);
     const handleCheckIn = () => {
       const res = checkInRoom(currentRoom.id);
       if (res.success) {
@@ -720,40 +731,40 @@ export const RoomScreens: React.FC = () => {
           </div>
 
           <div className="space-y-2">
-            <div className="p-2.5 rounded-xl border border-slate-200 bg-slate-50 flex items-center justify-between">
+            <div className={`p-2.5 rounded-xl border flex items-center justify-between ${hasSignedContract ? 'border-emerald-200 bg-emerald-50' : 'border-amber-200 bg-amber-50'}`}>
               <span className="font-semibold text-slate-800">1. Hợp đồng thuê giấy đã ký hai bên:</span>
-              <span className="text-emerald-600 font-bold flex items-center">
-                <Check className="w-4 h-4 mr-1" /> Đã ký
+              <span className={`font-bold ${hasSignedContract ? 'text-emerald-700' : 'text-amber-700'}`}>
+                {hasSignedContract ? 'Đã ký' : 'Chưa ký'}
               </span>
             </div>
 
-            <div className="p-2.5 rounded-xl border border-slate-200 bg-slate-50 flex items-center justify-between">
+            <div className={`p-2.5 rounded-xl border flex items-center justify-between ${hasConfirmedPayment ? 'border-emerald-200 bg-emerald-50' : 'border-amber-200 bg-amber-50'}`}>
               <div>
                 <span className="font-semibold text-slate-800">2. Thanh toán ban đầu (1 tháng cọc + 1 tháng thuê đầu):</span>
-                <div className="text-[11px] text-slate-500">Đối chiếu chuyển khoản ngân hàng</div>
+                <div className="text-[11px] text-slate-500">{hasConfirmedPayment ? `Đã xác nhận: ${currentInitialPayment?.amount.toLocaleString()} đ` : 'Chưa xác nhận'}</div>
               </div>
               <button
-                onClick={() => navigate('ROOM_FIRSTPAY', { roomId: currentRoom.id })}
+                onClick={() => navigate('ROOM_FIRSTPAY', { roomId: currentRoom.id, contractId: currentContract?.id })}
                 className="text-xs font-bold text-blue-600 hover:text-blue-800 underline cursor-pointer"
               >
-                Kiểm tra tiền
+                {hasConfirmedPayment ? 'Xem khoản thu' : 'Kiểm tra tiền'}
               </button>
             </div>
 
-            <div className="p-2.5 rounded-xl border border-slate-200 bg-slate-50 flex items-center justify-between">
+            <div className={`p-2.5 rounded-xl border flex items-center justify-between ${hasSignedHandover ? 'border-emerald-200 bg-emerald-50' : 'border-amber-200 bg-amber-50'}`}>
               <span className="font-semibold text-slate-800">3. Biên bản bàn giao tài sản giấy:</span>
               <button
-                onClick={() => navigate('ASSET_RECEIVE', { roomId: currentRoom.id })}
+                onClick={() => navigate('ASSET_RECEIVE', { roomId: currentRoom.id, contractId: currentContract?.id })}
                 className="text-xs font-bold text-blue-600 hover:text-blue-800 underline cursor-pointer"
               >
-                Biên bản nhận
+                {hasSignedHandover ? 'Đã ghi nhận' : 'Biên bản nhận'}
               </button>
             </div>
 
-            <div className="p-2.5 rounded-xl border border-slate-200 bg-slate-50 flex items-center justify-between">
+            <div className={`p-2.5 rounded-xl border flex items-center justify-between ${hasSignedHandover ? 'border-emerald-200 bg-emerald-50' : 'border-amber-200 bg-amber-50'}`}>
               <span className="font-semibold text-slate-800">4. Bàn giao chìa khóa & thẻ từ thực tế:</span>
-              <span className="text-emerald-600 font-bold flex items-center">
-                <Check className="w-4 h-4 mr-1" /> Sẵn sàng
+              <span className={`font-bold ${hasSignedHandover ? 'text-emerald-700' : 'text-amber-700'}`}>
+                {hasSignedHandover ? 'Đã xác nhận' : 'Chưa xác nhận'}
               </span>
             </div>
           </div>
@@ -780,6 +791,11 @@ export const RoomScreens: React.FC = () => {
 
   // 7. ROOM_MISSING Screen (F.4 - Cross-links 20, 21)
   if (currentScreenId === 'ROOM_MISSING') {
+    const missingChecks = [
+      { label: 'Hợp đồng chưa được ký', missing: !currentContract || currentContract.status !== 'DA_KY' && currentContract.status !== 'HIEU_LUC' },
+      { label: 'Chưa xác nhận đủ tiền cọc và tiền thuê đầu', missing: !currentInitialPayment },
+      { label: 'Chưa ký biên bản bàn giao tài sản', missing: !currentHandover }
+    ].filter(item => item.missing);
     return (
       <div className="flex-1 flex flex-col p-4 bg-slate-50 space-y-3">
         <AppHeader
@@ -795,39 +811,63 @@ export const RoomScreens: React.FC = () => {
           </div>
 
           <div className="space-y-2">
-            {/* Link 20: ROOM_FIRSTPAY */}
-            <div className="p-3 rounded-xl border border-amber-200 bg-amber-50/60 flex items-start justify-between">
-              <div>
-                <strong className="font-bold text-amber-900">Thiếu: Thanh toán ban đầu chưa đủ</strong>
-                <p className="text-[11px] text-amber-800 mt-0.5">
-                  Cần đối chiếu đủ 1 tháng tiền cọc ({currentRoom.basePrice.toLocaleString()}đ) + 1 tháng tiền thuê đầu ({currentRoom.basePrice.toLocaleString()}đ).
-                </p>
+            {missingChecks.length === 0 && (
+              <p className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-emerald-800">
+                Các điều kiện đang có đã đầy đủ. Hãy xác nhận lại nhận phòng.
+              </p>
+            )}
+            {missingChecks.some(item => item.label.includes('tiền')) && (
+              <div className="p-3 rounded-xl border border-amber-200 bg-amber-50/60 flex items-start justify-between">
+                <div>
+                  <strong className="font-bold text-amber-900">Thiếu: Thanh toán ban đầu chưa đủ</strong>
+                  <p className="text-[11px] text-amber-800 mt-0.5">
+                    Cần đối chiếu đủ {currentContract?.depositAmount?.toLocaleString() || '—'} đ tiền cọc và {currentContract?.firstMonthRent?.toLocaleString() || '—'} đ tiền thuê đầu.
+                  </p>
+                </div>
+                <button
+                  onClick={() => navigate('ROOM_FIRSTPAY', { roomId: currentRoom.id })}
+                  className="px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold shrink-0 ml-2 cursor-pointer"
+                >
+                  Tra soát (#20)
+                </button>
               </div>
-              <button
-                onClick={() => navigate('ROOM_FIRSTPAY', { roomId: currentRoom.id })}
-                className="px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold shrink-0 ml-2 cursor-pointer"
-              >
-                Tra soát (#20)
-              </button>
-            </div>
+            )}
 
-            {/* Link 21: CONTRACT_DETAIL */}
-            <div className="p-3 rounded-xl border border-slate-200 bg-slate-50 flex items-start justify-between">
-              <div>
-                <strong className="font-bold text-slate-900">Thiếu: Hợp đồng giấy chưa hoàn tất chữ ký</strong>
-                <p className="text-[11px] text-slate-600 mt-0.5">
-                  Cần tải ảnh hoặc xác nhận chữ ký hai bên trên bản hợp đồng giấy.
-                </p>
+            {missingChecks.some(item => item.label.includes('Hợp đồng')) && (
+              <div className="p-3 rounded-xl border border-slate-200 bg-slate-50 flex items-start justify-between">
+                <div>
+                  <strong className="font-bold text-slate-900">Thiếu: Hợp đồng chưa được ký</strong>
+                  <p className="text-[11px] text-slate-600 mt-0.5">
+                    Cần hoàn tất thông tin và chữ ký trên hợp đồng trước khi nhận phòng.
+                  </p>
+                </div>
+                <button
+                  onClick={() => currentContract
+                    ? navigate('CONTRACT_DETAIL', { roomId: currentRoom.id, contractId: currentContract.id })
+                    : navigate('CONTRACTS')}
+                  className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold shrink-0 ml-2 cursor-pointer"
+                >
+                  Xem HĐ (#21)
+                </button>
               </div>
-              <button
-                onClick={() => currentContract
-                  ? navigate('CONTRACT_DETAIL', { roomId: currentRoom.id, contractId: currentContract.id })
-                  : navigate('CONTRACTS')}
-                className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold shrink-0 ml-2 cursor-pointer"
-              >
-                Xem HĐ (#21)
-              </button>
-            </div>
+            )}
+
+            {missingChecks.some(item => item.label.includes('biên bản')) && (
+              <div className="p-3 rounded-xl border border-slate-200 bg-slate-50 flex items-start justify-between">
+                <div>
+                  <strong className="font-bold text-slate-900">Thiếu: Biên bản bàn giao tài sản</strong>
+                  <p className="text-[11px] text-slate-600 mt-0.5">
+                    Ghi nhận hiện trạng, tài sản, chìa khóa và thẻ từ trước khi nhận phòng.
+                  </p>
+                </div>
+                <button
+                  onClick={() => navigate('ASSET_INV', { roomId: currentRoom.id })}
+                  className="px-2.5 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold shrink-0 ml-2 cursor-pointer"
+                >
+                  Lập biên bản
+                </button>
+              </div>
+            )}
           </div>
 
           <div className="pt-2">
@@ -845,8 +885,11 @@ export const RoomScreens: React.FC = () => {
 
   // 8. ROOM_FIRSTPAY Screen (F.4 - Cross-links 14, 15)
   if (currentScreenId === 'ROOM_FIRSTPAY') {
-    const expectedDeposit = currentRoom.basePrice;
-    const expectedRent = currentRoom.basePrice;
+    if (!currentContract || currentContract.type !== 'LAN_DAU' || currentContract.status !== 'DA_KY') {
+      return <MissingRecord title="Thanh toán ban đầu" message="Cần chọn hợp đồng lần đầu đã ký trước khi xác nhận khoản thu." backTo="ROOMS" />;
+    }
+    const expectedDeposit = currentContract.depositAmount;
+    const expectedRent = currentContract.firstMonthRent;
     const expectedTotal = expectedDeposit + expectedRent;
 
     const handleConfirmFirstPay = (e: React.FormEvent) => {

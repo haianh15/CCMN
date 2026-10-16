@@ -42,7 +42,7 @@ export const TenantScreens: React.FC = () => {
   const tenantRequired = !['TENANTS', 'TENANT_NEW'].includes(currentScreenId);
   const currentTenant = (targetTenantId
     ? tenants.find(t => t.id === targetTenantId)
-    : tenantRequired ? undefined : tenants[0])!;
+    : undefined)!;
   const tenantCoResidents = coResidents.filter(c => c.tenantId === currentTenant?.id);
   const tenantContracts = contracts.filter(c => c.tenantId === currentTenant?.id);
   const tenantRoom = rooms.find(r => r.id === currentTenant?.currentRoomId);
@@ -55,24 +55,24 @@ export const TenantScreens: React.FC = () => {
   const [fullName, setFullName] = useState('');
   const [phone, setPhone] = useState('');
   const [idCardNumber, setIdCardNumber] = useState('');
-  const [idCardIssuedDate, setIdCardIssuedDate] = useState('15/04/2021');
-  const [idCardIssuedPlace, setIdCardIssuedPlace] = useState('Cục CSQLHC về TTXH');
+  const [idCardIssuedDate, setIdCardIssuedDate] = useState('');
+  const [idCardIssuedPlace, setIdCardIssuedPlace] = useState('');
   const [permanentAddress, setPermanentAddress] = useState('');
   const [email, setEmail] = useState('');
   const [newTenantError, setNewTenantError] = useState<string | null>(null);
 
   // TENANT_PERSON_EDIT form
   const [personName, setPersonName] = useState('');
-  const [personRelation, setPersonRelation] = useState('Bạn cùng phòng');
+  const [personRelation, setPersonRelation] = useState('');
   const [personPhone, setPersonPhone] = useState('');
   const [personIdCard, setPersonIdCard] = useState('');
-  const [personArrival, setPersonArrival] = useState('15/10/2026');
+  const [personArrival, setPersonArrival] = useState('');
 
   // TENANT_EDIT form
   const [editPhone, setEditPhone] = useState(currentTenant?.phone || '');
   const [editEmail, setEditEmail] = useState(currentTenant?.email || '');
   const [editAddress, setEditAddress] = useState(currentTenant?.permanentAddress || '');
-  const [editReason, setEditReason] = useState('Khách thuê đổi số điện thoại mới');
+  const [editReason, setEditReason] = useState('');
 
   if (tenantRequired && (!targetTenantId || !tenants.some(tenant => tenant.id === targetTenantId))) {
     return <MissingRecord title="Hồ sơ khách thuê" message="Hồ sơ khách thuê được chọn không còn tồn tại." backTo="TENANTS" />;

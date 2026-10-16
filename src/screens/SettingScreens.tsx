@@ -21,36 +21,38 @@ export const SettingScreens: React.FC = () => {
   const {
     currentScreenId,
     navigate,
+    currentUser,
     tariffs,
     bankConfigs,
-    periods,
-    rooms,
     calculations,
     saveTariffConfig,
     saveBankConfig
   } = useApp();
 
-  const activeTariff = tariffs.find(t => t.isActive) || tariffs[0];
-  const activeBank = bankConfigs.find(b => b.isActive) || bankConfigs[0];
+  const activeTariff = tariffs.find(t => t.isActive);
+  const activeBank = bankConfigs.find(b => b.isActive);
   const latestCalculation = calculations[calculations.length - 1];
-  const latestPeriod = periods[periods.length - 1];
-  const defaultBillingRoom = rooms.find(room => room.id === latestCalculation?.roomId) ||
-    rooms.find(room => room.status === 'DANG_THUE') || rooms[0];
+  const today = new Date();
+  const todayIso = new Date(today.getTime() - today.getTimezoneOffset() * 60_000).toISOString().slice(0, 10);
 
   // SET_TARIFF form
-  const [tariffName, setTariffName] = useState('Phiên bản Đơn giá Q4/2026');
-  const [effectiveFrom, setEffectiveFrom] = useState('01/11/2026');
-  const [electricPrice, setElectricPrice] = useState<number>(activeTariff.electricityPricePerKwh);
-  const [waterPrice, setWaterPrice] = useState<number>(activeTariff.waterPricePerM3);
-  const [serviceFee, setServiceFee] = useState<number>(activeTariff.fixedServiceFeePerTenancy);
-  const [tariffNotes, setTariffNotes] = useState('Điều chỉnh giá theo thông báo mới');
+  const [tariffName, setTariffName] = useState('');
+  const [effectiveFrom, setEffectiveFrom] = useState('');
+  const [electricPrice, setElectricPrice] = useState<number>(activeTariff?.electricityPricePerKwh || 0);
+  const [waterPrice, setWaterPrice] = useState<number>(activeTariff?.waterPricePerM3 || 0);
+  const [serviceFee, setServiceFee] = useState<number>(activeTariff?.fixedServiceFeePerTenancy || 0);
+  const [garbageFee, setGarbageFee] = useState<number>(activeTariff?.garbageFeePerRoom || 0);
+  const [wifiFee, setWifiFee] = useState<number>(activeTariff?.wifiFeePerRoom || 0);
+  const [tariffNotes, setTariffNotes] = useState('');
 
   // SET_BANK form
-  const [bankName, setBankName] = useState(activeBank.bankName);
-  const [bankCode, setBankCode] = useState(activeBank.bankCode);
-  const [accountNumber, setAccountNumber] = useState(activeBank.accountNumber);
-  const [accountHolder, setAccountHolder] = useState(activeBank.accountHolder);
-  const [bankEffective, setBankEffective] = useState('01/11/2026');
+  const [bankName, setBankName] = useState(activeBank?.bankName || '');
+  const [bankCode, setBankCode] = useState(activeBank?.bankCode || '');
+  const [accountNumber, setAccountNumber] = useState(activeBank?.accountNumber || '');
+  const [accountHolder, setAccountHolder] = useState(activeBank?.accountHolder || '');
+  const [bankBranch, setBankBranch] = useState(activeBank?.branch || '');
+  const [bankEffective, setBankEffective] = useState('');
+  const [formError, setFormError] = useState<string | null>(null);
 
   // 1. SETTINGS Hub Screen (F.13)
   if (currentScreenId === 'SETTINGS') {
@@ -76,7 +78,9 @@ export const SettingScreens: React.FC = () => {
                 <div className="min-w-0 flex-1">
                   <div className="text-xs font-bold text-slate-900 truncate">Đơn giá điện, nước & phí dịch vụ</div>
                   <div className="text-[11px] text-slate-500 truncate mt-0.5">
-                    Đang áp dụng: Điện {activeTariff.electricityPricePerKwh.toLocaleString()}đ • Nước {activeTariff.waterPricePerM3.toLocaleString()}đ
+                    {activeTariff
+                      ? `Đang áp dụng: Điện ${activeTariff.electricityPricePerKwh.toLocaleString()}đ • Nước ${activeTariff.waterPricePerM3.toLocaleString()}đ`
+                      : 'Chưa thiết lập đơn giá'}
                   </div>
                 </div>
               </div>
@@ -95,7 +99,7 @@ export const SettingScreens: React.FC = () => {
                 <div className="min-w-0 flex-1">
                   <div className="text-xs font-bold text-slate-900 truncate">Tài khoản ngân hàng nhận tiền QR</div>
                   <div className="text-[11px] text-slate-500 truncate mt-0.5">
-                    {activeBank.bankName} - {activeBank.accountNumber}
+                    {activeBank ? `${activeBank.bankName} - ${activeBank.accountNumber}` : 'Chưa thiết lập tài khoản'}
                   </div>
                 </div>
               </div>
@@ -132,17 +136,22 @@ export const SettingScreens: React.FC = () => {
   if (currentScreenId === 'SET_TARIFF') {
     const handleSaveTariff = (e: React.FormEvent) => {
       e.preventDefault();
-      saveTariffConfig({
+      setFormError(null);
+      const result = saveTariffConfig({
         versionName: tariffName,
         effectiveFrom,
         electricityPricePerKwh: Number(electricPrice),
         waterPricePerM3: Number(waterPrice),
         fixedServiceFeePerTenancy: Number(serviceFee),
-        garbageFeePerRoom: 30000,
-        wifiFeePerRoom: 50000,
-        updatedBy: 'Nguyễn Văn Minh',
+        garbageFeePerRoom: Number(garbageFee),
+        wifiFeePerRoom: Number(wifiFee),
+        updatedBy: currentUser?.fullName || 'Chủ nhà',
         notes: tariffNotes
       });
+      if (!result.success) {
+        setFormError('Chưa lưu được đơn giá. Hãy kiểm tra lại thông tin.');
+        return;
+      }
       // Cross-link 56 to PAY_CALC
       if (latestCalculation) {
         navigate('PAY_CALC', {
@@ -150,8 +159,6 @@ export const SettingScreens: React.FC = () => {
           roomId: latestCalculation.roomId,
           calcId: latestCalculation.id
         });
-      } else if (latestPeriod && defaultBillingRoom) {
-        navigate('PAY_METER', { periodId: latestPeriod.id, roomId: defaultBillingRoom.id });
       } else {
         navigate('PAY');
       }
@@ -185,6 +192,7 @@ export const SettingScreens: React.FC = () => {
           </div>
 
           <form onSubmit={handleSaveTariff} className="space-y-3">
+            {formError && <p className="rounded-lg border border-rose-200 bg-rose-50 p-2 text-rose-800">{formError}</p>}
             <div>
               <label className="block font-bold text-slate-700 mb-1">Tên phiên bản đơn giá</label>
               <input
@@ -199,11 +207,12 @@ export const SettingScreens: React.FC = () => {
             <div>
               <label className="block font-bold text-slate-700 mb-1">Ngày bắt đầu có hiệu lực</label>
               <input
-                type="text"
+                type="date"
                 value={effectiveFrom}
                 onChange={e => setEffectiveFrom(e.target.value)}
+                min={todayIso}
                 required
-                className="w-full px-3 py-2 rounded-xl border border-slate-300 font-mono"
+                className="w-full px-3 py-2 rounded-xl border border-slate-300"
               />
             </div>
 
@@ -212,6 +221,7 @@ export const SettingScreens: React.FC = () => {
                 <label className="block font-bold text-slate-700 mb-1">Giá điện (đ/kWh)</label>
                 <input
                   type="number"
+                  min={0}
                   value={electricPrice}
                   onChange={e => setElectricPrice(Number(e.target.value))}
                   required
@@ -222,6 +232,7 @@ export const SettingScreens: React.FC = () => {
                 <label className="block font-bold text-slate-700 mb-1">Giá nước (đ/m³)</label>
                 <input
                   type="number"
+                  min={0}
                   value={waterPrice}
                   onChange={e => setWaterPrice(Number(e.target.value))}
                   required
@@ -234,6 +245,7 @@ export const SettingScreens: React.FC = () => {
               <label className="block font-bold text-slate-700 mb-1">Phí dịch vụ cố định (đ/lượt thuê/tháng)</label>
               <input
                 type="number"
+                min={0}
                 value={serviceFee}
                 onChange={e => setServiceFee(Number(e.target.value))}
                 required
@@ -242,6 +254,31 @@ export const SettingScreens: React.FC = () => {
               <p className="text-[10px] text-slate-500 mt-1">
                 Quy tắc D4: Mỗi lượt thuê riêng trong cùng kỳ đóng đủ phí dịch vụ cố định này theo quy định đã chốt.
               </p>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Phí Wi-Fi (đ/phòng/tháng)</label>
+                <input
+                  type="number"
+                  min={0}
+                  value={wifiFee}
+                  onChange={e => setWifiFee(Number(e.target.value))}
+                  required
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 font-mono"
+                />
+              </div>
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Phí rác (đ/phòng/tháng)</label>
+                <input
+                  type="number"
+                  min={0}
+                  value={garbageFee}
+                  onChange={e => setGarbageFee(Number(e.target.value))}
+                  required
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 font-mono"
+                />
+              </div>
             </div>
 
             <div className="pt-2">
@@ -304,15 +341,20 @@ export const SettingScreens: React.FC = () => {
   if (currentScreenId === 'SET_BANK') {
     const handleSaveBank = (e: React.FormEvent) => {
       e.preventDefault();
-      saveBankConfig({
+      setFormError(null);
+      const result = saveBankConfig({
         bankName,
         bankCode,
         accountNumber,
         accountHolder: accountHolder.toUpperCase(),
-        branch: 'Chi nhánh Hà Nội',
+        branch: bankBranch,
         effectiveFrom: bankEffective,
-        updatedBy: 'Nguyễn Văn Minh'
+        updatedBy: currentUser?.fullName || 'Chủ nhà'
       });
+      if (!result.success) {
+        setFormError('Chưa lưu được tài khoản. Kiểm tra mã VietQR 6 số và các thông tin bắt buộc.');
+        return;
+      }
       // Cross-link 57 to PAY_NOTICE_NEW
       if (latestCalculation) {
         navigate('PAY_NOTICE_NEW', {
@@ -350,6 +392,7 @@ export const SettingScreens: React.FC = () => {
           </div>
 
           <form onSubmit={handleSaveBank} className="space-y-3">
+            {formError && <p className="rounded-lg border border-rose-200 bg-rose-50 p-2 text-rose-800">{formError}</p>}
             <div>
               <label className="block font-bold text-slate-700 mb-1">Ngân hàng thụ hưởng</label>
               <input
@@ -362,6 +405,19 @@ export const SettingScreens: React.FC = () => {
             </div>
 
             <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Mã ngân hàng VietQR (6 số)</label>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  pattern="[0-9]{6}"
+                  maxLength={6}
+                  value={bankCode}
+                  onChange={e => setBankCode(e.target.value)}
+                  required
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 font-mono"
+                />
+              </div>
               <div>
                 <label className="block font-bold text-slate-700 mb-1">Số tài khoản</label>
                 <input
@@ -385,13 +441,25 @@ export const SettingScreens: React.FC = () => {
             </div>
 
             <div>
-              <label className="block font-bold text-slate-700 mb-1">Ngày áp dụng</label>
+              <label className="block font-bold text-slate-700 mb-1">Chi nhánh</label>
               <input
                 type="text"
+                value={bankBranch}
+                onChange={e => setBankBranch(e.target.value)}
+                required
+                className="w-full px-3 py-2 rounded-xl border border-slate-300"
+              />
+            </div>
+
+            <div>
+              <label className="block font-bold text-slate-700 mb-1">Ngày áp dụng</label>
+              <input
+                type="date"
                 value={bankEffective}
                 onChange={e => setBankEffective(e.target.value)}
+                min={todayIso}
                 required
-                className="w-full px-3 py-2 rounded-xl border border-slate-300 font-mono"
+                className="w-full px-3 py-2 rounded-xl border border-slate-300"
               />
             </div>
 

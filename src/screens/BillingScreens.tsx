@@ -63,6 +63,7 @@ export const BillingScreens: React.FC = () => {
   const currentReading = meterReadings.find(m => m.periodId === currentPeriod?.id && m.roomId === currentRoom?.id);
   const previousReading = meterReadings
     .filter(reading => reading.roomId === currentRoom?.id && reading.periodId !== currentPeriod?.id)
+    .sort((a, b) => a.periodId.localeCompare(b.periodId))
     .at(-1);
   const targetCalcId = params.calcId as string | undefined;
   const currentCalc = (targetCalcId
@@ -74,29 +75,36 @@ export const BillingScreens: React.FC = () => {
     : notices.find(n => n.periodId === currentPeriod?.id && n.roomId === currentRoom?.id) ||
       (!['PAY_NOTICE_DETAIL', 'PAY_CONFIRM', 'PAY_CORRECT'].includes(currentScreenId) ? notices[notices.length - 1] : undefined))!;
   const currentTx = (currentNotice ? transactions.find(t => t.noticeId === currentNotice.id) : undefined)!;
+  const activeBankConfig = bankConfigs.find(bank => bank.isActive);
+  const today = new Date();
+  const todayIso = new Date(today.getTime() - today.getTimezoneOffset() * 60_000).toISOString().slice(0, 10);
 
   // PAY_METER form
-  const [meterElNew, setMeterElNew] = useState<number>(currentReading?.electricNew ?? previousReading?.electricNew ?? 1000);
-  const [meterWaNew, setMeterWaNew] = useState<number>(currentReading?.waterNew ?? previousReading?.waterNew ?? 30);
+  const [meterElOld, setMeterElOld] = useState<number>(currentReading?.electricOld ?? previousReading?.electricNew ?? 0);
+  const [meterWaOld, setMeterWaOld] = useState<number>(currentReading?.waterOld ?? previousReading?.waterNew ?? 0);
+  const [meterElNew, setMeterElNew] = useState<number>(currentReading?.electricNew ?? previousReading?.electricNew ?? 0);
+  const [meterWaNew, setMeterWaNew] = useState<number>(currentReading?.waterNew ?? previousReading?.waterNew ?? 0);
   const [meterError, setMeterError] = useState<string | null>(null);
 
   // PAY_METER_EDIT form
-  const [editElNew, setEditElNew] = useState<number>(currentReading?.electricNew ?? previousReading?.electricNew ?? 1000);
-  const [editWaNew, setEditWaNew] = useState<number>(currentReading?.waterNew ?? previousReading?.waterNew ?? 30);
-  const [editMeterReason, setEditMeterReason] = useState('Khách phản hồi công tơ nhìn nhầm số hàng đơn vị');
+  const [editElNew, setEditElNew] = useState<number>(currentReading?.electricNew ?? 0);
+  const [editWaNew, setEditWaNew] = useState<number>(currentReading?.waterNew ?? 0);
+  const [editMeterReason, setEditMeterReason] = useState('');
   const [editMeterError, setEditMeterError] = useState<string | null>(null);
 
   // PAY_NOTICE_NEW form
-  const [noticeDueDate, setNoticeDueDate] = useState('20/10/2026');
+  const [noticeDueDate, setNoticeDueDate] = useState('');
+  const [noticeError, setNoticeError] = useState<string | null>(null);
 
   // PAY_CONFIRM form
   const [confirmAmount, setConfirmAmount] = useState<number>(currentNotice?.totalAmount || 0);
-  const [confirmRefCode, setConfirmRefCode] = useState(`MB-FT${Date.now().toString().slice(-6)}`);
+  const [confirmRefCode, setConfirmRefCode] = useState('');
+  const [confirmProof, setConfirmProof] = useState('');
   const [confirmError, setConfirmError] = useState<string | null>(null);
 
   // PAY_CORRECT form
   const [correctAmount, setCorrectAmount] = useState<number>(currentTx?.receivedAmount || 0);
-  const [correctReason, setCorrectReason] = useState('Đối chiếu lại sao kê ngân hàng phát hiện nhầm mã phòng');
+  const [correctReason, setCorrectReason] = useState('');
   const [correctError, setCorrectError] = useState<string | null>(null);
 
   // Search in PAY_TRACK
@@ -301,17 +309,31 @@ export const BillingScreens: React.FC = () => {
 
   // 3. PAY_METER Screen (F.9 - Cross-link 40)
   if (currentScreenId === 'PAY_METER') {
-    const elOld = currentReading?.electricOld ?? previousReading?.electricNew ?? 1000;
-    const waOld = currentReading?.waterOld ?? previousReading?.waterNew ?? 30;
+    const elOld = currentReading?.electricOld ?? previousReading?.electricNew ?? meterElOld;
+    const waOld = currentReading?.waterOld ?? previousReading?.waterNew ?? meterWaOld;
+    const hasPreviousMeterReading = Boolean(currentReading || previousReading);
 
     const handleSaveMeter = (e: React.FormEvent) => {
       e.preventDefault();
       setMeterError(null);
-      const res = recordMeterReading(currentPeriod.id, currentRoom.id, Number(meterElNew), Number(meterWaNew));
+      const res = recordMeterReading(
+        currentPeriod.id,
+        currentRoom.id,
+        Number(meterElNew),
+        Number(meterWaNew),
+        undefined,
+        undefined,
+        Number(meterElOld),
+        Number(meterWaOld)
+      );
       if (res.success) {
         // Cross-link 40 to PAY_CALC
-        calculatePeriodForRoom(currentPeriod.id, currentRoom.id);
-        navigate('PAY_CALC', { periodId: currentPeriod.id, roomId: currentRoom.id });
+        const calculation = calculatePeriodForRoom(currentPeriod.id, currentRoom.id);
+        if (calculation.success) {
+          navigate('PAY_CALC', { periodId: currentPeriod.id, roomId: currentRoom.id });
+        } else {
+          setMeterError('Đã lưu chỉ số. Hãy kiểm tra đơn giá và thông tin hợp đồng trước khi tính tiền.');
+        }
       } else if (res.error) {
         setMeterError(res.error);
       }
@@ -346,6 +368,19 @@ export const BillingScreens: React.FC = () => {
                 <span>Điện sinh hoạt (Công tơ)</span>
                 <span className="text-[11px] text-slate-500 font-mono">Số cũ: {elOld} kWh</span>
               </div>
+              {!hasPreviousMeterReading && (
+                <label className="block text-[11px] text-slate-600">
+                  Chỉ số điện đầu kỳ thực tế
+                  <input
+                    type="number"
+                    min={0}
+                    value={meterElOld}
+                    onChange={e => setMeterElOld(Number(e.target.value))}
+                    required
+                    className="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 font-mono bg-white"
+                  />
+                </label>
+              )}
               <div>
                 <label className="block text-[11px] text-slate-600 mb-1">Chỉ số điện mới (tối thiểu {elOld})</label>
                 <input
@@ -367,6 +402,19 @@ export const BillingScreens: React.FC = () => {
                 <span>Nước sạch (Đồng hồ)</span>
                 <span className="text-[11px] text-slate-500 font-mono">Số cũ: {waOld} m³</span>
               </div>
+              {!hasPreviousMeterReading && (
+                <label className="block text-[11px] text-slate-600">
+                  Chỉ số nước đầu kỳ thực tế
+                  <input
+                    type="number"
+                    min={0}
+                    value={meterWaOld}
+                    onChange={e => setMeterWaOld(Number(e.target.value))}
+                    required
+                    className="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300 font-mono bg-white"
+                  />
+                </label>
+              )}
               <div>
                 <label className="block text-[11px] text-slate-600 mb-1">Chỉ số nước mới (tối thiểu {waOld})</label>
                 <input
@@ -652,11 +700,15 @@ export const BillingScreens: React.FC = () => {
 
   // 8. PAY_NOTICE_NEW Screen (F.9 - Cross-link 44)
   if (currentScreenId === 'PAY_NOTICE_NEW') {
-    const handleIssueNotice = (e: React.FormEvent) => {
+    const handleIssueNotice = async (e: React.FormEvent) => {
       e.preventDefault();
-      const res = issuePaymentNoticeQR(currentCalc.id, noticeDueDate);
-      // Cross-link 44 to PAY_NOTICE_DETAIL
-      navigate('PAY_NOTICE_DETAIL', { noticeId: res.noticeId, periodId: currentPeriod.id, roomId: currentRoom.id });
+      setNoticeError(null);
+      const res = await issuePaymentNoticeQR(currentCalc.id, noticeDueDate);
+      if (res.success) {
+        navigate('PAY_NOTICE_DETAIL', { noticeId: res.noticeId, periodId: currentPeriod.id, roomId: currentRoom.id });
+      } else {
+        setNoticeError('Chưa tạo được thông báo. Kiểm tra bảng tính đã đối chiếu, tài khoản ngân hàng và ngày đến hạn.');
+      }
     };
 
     return (
@@ -676,14 +728,16 @@ export const BillingScreens: React.FC = () => {
           </div>
 
           <form onSubmit={handleIssueNotice} className="space-y-3">
+            {noticeError && <p className="rounded-lg border border-rose-200 bg-rose-50 p-2 text-rose-800">{noticeError}</p>}
             <div>
               <label className="block font-bold text-slate-700 mb-1">Hạn thanh toán</label>
               <input
-                type="text"
+                type="date"
                 value={noticeDueDate}
                 onChange={e => setNoticeDueDate(e.target.value)}
                 required
-                className="w-full px-3 py-2 rounded-xl border border-slate-300 font-mono"
+                min={todayIso}
+                className="w-full px-3 py-2 rounded-xl border border-slate-300"
               />
             </div>
 
@@ -694,7 +748,11 @@ export const BillingScreens: React.FC = () => {
               </div>
               <div className="flex justify-between text-slate-600">
                 <span>Tài khoản nhận:</span>
-                <span className="font-semibold text-slate-800">MBBank - 0912345678888 (NGUYEN VAN MINH)</span>
+                <span className="font-semibold text-slate-800 text-right">
+                  {activeBankConfig
+                    ? `${activeBankConfig.bankName} - ${activeBankConfig.accountNumber} (${activeBankConfig.accountHolder})`
+                    : 'Chưa thiết lập tài khoản'}
+                </span>
               </div>
             </div>
 
@@ -864,13 +922,19 @@ export const BillingScreens: React.FC = () => {
 
                 {/* Actions per status */}
                 <div className="pt-1 flex space-x-2">
-                  {tx.status === 'CHUA_THU' && (
+                  {tx.status === 'CHUA_THU' && notices.find(notice => notice.id === tx.noticeId)?.status === 'DANG_HIEU_LUC' && (
                     <button
                       onClick={() => navigate('PAY_CONFIRM', { noticeId: tx.noticeId, roomId: tx.roomId })}
                       className="flex-1 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl text-xs flex items-center justify-center space-x-1 cursor-pointer"
                     >
                       <span>Khách đã chuyển: Xác nhận thu</span>
                     </button>
+                  )}
+
+                  {tx.status === 'CHUA_THU' && notices.find(notice => notice.id === tx.noticeId)?.status === 'DA_THAY_THE' && (
+                    <span className="flex-1 py-2 text-center bg-slate-100 text-slate-500 rounded-xl text-xs">
+                      Thông báo đã được thay thế
+                    </span>
                   )}
 
                   {tx.status === 'DA_THU' && (
@@ -907,7 +971,7 @@ export const BillingScreens: React.FC = () => {
     const handleConfirmSubmit = (e: React.FormEvent) => {
       e.preventDefault();
       setConfirmError(null);
-      const res = confirmPaymentReceived(currentNotice.id, Number(confirmAmount), confirmRefCode);
+      const res = confirmPaymentReceived(currentNotice.id, Number(confirmAmount), confirmRefCode, confirmProof);
       if (res.success) {
         navigate('PAY_TRACK', { periodId: currentNotice.periodId });
       } else if (res.error) {
@@ -945,6 +1009,7 @@ export const BillingScreens: React.FC = () => {
               <label className="block font-bold text-slate-700 mb-1">Số tiền thực tế nhận trên sao kê ngân hàng (VNĐ)</label>
               <input
                 type="number"
+                min={0}
                 value={confirmAmount}
                 onChange={e => setConfirmAmount(Number(e.target.value))}
                 required
@@ -963,6 +1028,17 @@ export const BillingScreens: React.FC = () => {
                 onChange={e => setConfirmRefCode(e.target.value)}
                 required
                 className="w-full px-3 py-2 rounded-xl border border-slate-300 font-mono"
+              />
+            </div>
+
+            <div>
+              <label className="block font-bold text-slate-700 mb-1">Chứng từ ngân hàng (đường dẫn hoặc mã tham chiếu tệp)</label>
+              <input
+                type="text"
+                value={confirmProof}
+                onChange={e => setConfirmProof(e.target.value)}
+                required
+                className="w-full px-3 py-2 rounded-xl border border-slate-300"
               />
             </div>
 

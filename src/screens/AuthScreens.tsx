@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { AlertCircle, ArrowLeft, Eye, EyeOff, KeyRound, Lock, Mail } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 
@@ -29,7 +29,7 @@ const Field: React.FC<React.InputHTMLAttributes<HTMLInputElement> & { label: str
   </label>
 );
 
-const ErrorMessage: React.FC<{ children: string }> = ({ children }) => (
+const ErrorMessage: React.FC<{ children: React.ReactNode }> = ({ children }) => (
   <div role="alert" className="flex items-start gap-2 rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">
     <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
     <span>{children}</span>
@@ -40,6 +40,9 @@ export const AuthScreens: React.FC = () => {
   const {
     currentScreenId,
     login,
+    changeFirstPassword,
+    isFirstPasswordChangeRequired,
+    lockUntil,
     forgotPassword,
     resetPassword,
     changePassword,
@@ -55,6 +58,19 @@ export const AuthScreens: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [firstPasswordError, setFirstPasswordError] = useState<string | null>(null);
+  const [lockSeconds, setLockSeconds] = useState(0);
+
+  useEffect(() => {
+    if (!lockUntil || lockUntil <= Date.now()) {
+      setLockSeconds(0);
+      return;
+    }
+    const updateLock = () => setLockSeconds(Math.max(0, Math.ceil((lockUntil - Date.now()) / 1000)));
+    updateLock();
+    const timer = window.setInterval(updateLock, 1000);
+    return () => window.clearInterval(timer);
+  }, [lockUntil]);
 
   const submitLogin = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -89,6 +105,56 @@ export const AuthScreens: React.FC = () => {
     if (!result.success) setError(result.error || 'Không đổi được mật khẩu. Vui lòng thử lại.');
   };
 
+  const submitFirstPassword = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setFirstPasswordError(null);
+    setBusy(true);
+    const result = await changeFirstPassword(newPassword, confirmPassword);
+    setBusy(false);
+    if (!result.success) setFirstPasswordError(result.error || 'Không đổi được mật khẩu. Vui lòng thử lại.');
+  };
+
+  if (isFirstPasswordChangeRequired || currentScreenId === 'FIRSTPASS') {
+    return (
+      <div className="flex min-h-full w-full items-start justify-center p-4 sm:items-center">
+        <AuthCard>
+          <h2 className="text-lg font-semibold text-slate-900">Đổi mật khẩu lần đầu</h2>
+          <p className="mt-1 text-sm leading-6 text-slate-600">Để bảo vệ tài khoản, hãy đặt mật khẩu mới có ít nhất 12 ký tự.</p>
+          <form onSubmit={submitFirstPassword} className="mt-5 space-y-4">
+            {firstPasswordError && <ErrorMessage>{firstPasswordError}</ErrorMessage>}
+            <Field
+              label="Mật khẩu mới"
+              type="password"
+              autoComplete="new-password"
+              minLength={12}
+              required
+              value={newPassword}
+              onChange={event => setNewPassword(event.target.value)}
+              placeholder="Ít nhất 12 ký tự"
+            />
+            <Field
+              label="Nhập lại mật khẩu"
+              type="password"
+              autoComplete="new-password"
+              minLength={12}
+              required
+              value={confirmPassword}
+              onChange={event => setConfirmPassword(event.target.value)}
+              placeholder="Nhập lại mật khẩu mới"
+            />
+            <button
+              type="submit"
+              disabled={busy}
+              className="min-h-11 w-full rounded-lg bg-blue-600 px-4 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-wait disabled:opacity-60"
+            >
+              {busy ? 'Đang cập nhật...' : 'Lưu mật khẩu mới'}
+            </button>
+          </form>
+        </AuthCard>
+      </div>
+    );
+  }
+
   if (currentScreenId === 'ACCOUNT') {
     return (
       <div className="flex min-h-full w-full items-start justify-center p-4 sm:items-center">
@@ -108,11 +174,11 @@ export const AuthScreens: React.FC = () => {
               label="Mật khẩu mới"
               type="password"
               autoComplete="new-password"
-              minLength={10}
+              minLength={12}
               required
               value={newPassword}
               onChange={event => setNewPassword(event.target.value)}
-              placeholder="Ít nhất 10 ký tự"
+              placeholder="Ít nhất 12 ký tự"
             />
             <Field
               label="Nhập lại mật khẩu"
@@ -186,18 +252,18 @@ export const AuthScreens: React.FC = () => {
       <div className="flex min-h-full w-full items-start justify-center p-4 sm:items-center">
         <AuthCard>
           <h2 className="text-lg font-semibold text-slate-900">Đặt mật khẩu mới</h2>
-          <p className="mt-1 text-sm leading-6 text-slate-600">Chọn mật khẩu mới có ít nhất 10 ký tự.</p>
+          <p className="mt-1 text-sm leading-6 text-slate-600">Chọn mật khẩu mới có ít nhất 12 ký tự.</p>
           <form onSubmit={event => submitPassword(event, resetPassword)} className="mt-5 space-y-4">
             {error && <ErrorMessage>{error}</ErrorMessage>}
             <Field
               label="Mật khẩu mới"
               type="password"
               autoComplete="new-password"
-              minLength={10}
+              minLength={12}
               required
               value={newPassword}
               onChange={event => setNewPassword(event.target.value)}
-              placeholder="Ít nhất 10 ký tự"
+              placeholder="Ít nhất 12 ký tự"
             />
             <Field
               label="Nhập lại mật khẩu"
@@ -228,6 +294,9 @@ export const AuthScreens: React.FC = () => {
         <p className="mt-1 text-sm text-slate-600">Dùng email và mật khẩu tài khoản quản lý.</p>
         <form onSubmit={submitLogin} className="mt-5 space-y-4">
           {error && <ErrorMessage>{error}</ErrorMessage>}
+          {lockSeconds > 0 && (
+            <ErrorMessage>Đăng nhập tạm khóa. Hãy thử lại sau {Math.ceil(lockSeconds / 60)} phút.</ErrorMessage>
+          )}
           <Field
             label="Email"
             type="email"
@@ -262,7 +331,7 @@ export const AuthScreens: React.FC = () => {
           </label>
           <button
             type="submit"
-            disabled={busy}
+            disabled={busy || lockSeconds > 0}
             className="min-h-11 w-full rounded-lg bg-blue-600 px-4 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-wait disabled:opacity-60"
           >
             {busy ? 'Đang đăng nhập...' : 'Đăng nhập'}

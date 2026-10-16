@@ -24,7 +24,9 @@ export const AssetScreens: React.FC = () => {
     currentScreenId,
     params,
     navigate,
+    currentUser,
     rooms,
+    contracts,
     assetItems,
     assetReports,
     handoverProtocols,
@@ -38,29 +40,38 @@ export const AssetScreens: React.FC = () => {
 
   const targetRoomId = params.roomId as string | undefined;
   const currentRoom = (targetRoomId ? rooms.find(r => r.id === targetRoomId) : undefined)!;
-  const roomAssets = assetItems.filter(item => item.roomId === currentRoom?.id);
-  const roomIncidents = incidents.filter(i => i.roomId === currentRoom?.id);
-  const currentReport = assetReports.find(r => r.roomId === currentRoom?.id);
-  const currentProtocol = handoverProtocols.find(p => p.roomId === currentRoom?.id);
+  const targetContractId = params.contractId as string | undefined;
+  const receiveContract = contracts.find(contract =>
+    contract.id === (targetContractId || currentRoom?.currentContractId) && contract.roomId === currentRoom?.id
+  ) || contracts.filter(contract =>
+    contract.roomId === currentRoom?.id && contract.status === 'DA_KY'
+  ).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
+  const activeRentalId = currentRoom?.currentRentalId || receiveContract?.rentalId;
+  const roomAssets = assetItems.filter(item => item.roomId === currentRoom?.id && item.rentalId === activeRentalId);
+  const roomIncidents = incidents.filter(i => i.roomId === currentRoom?.id && i.rentalId === activeRentalId);
+  const currentReport = assetReports.find(r => r.roomId === currentRoom?.id && r.rentalId === activeRentalId);
+  const currentProtocol = handoverProtocols.find(p => p.contractId === receiveContract?.id);
 
   // Selected incident
   const targetIncidentId = params.incidentId as string | undefined;
   const currentIncident = (targetIncidentId ? incidents.find(i => i.id === targetIncidentId) : roomIncidents[0])!;
 
   // ASSET_STATUS form
-  const [reportDesc, setReportDesc] = useState(currentReport?.overallDescription || 'Tường sơn mới, sàn gạch sạch sẽ, các thiết bị điện lạnh chạy tốt.');
-  const [reportPhotos, setReportPhotos] = useState<string[]>(currentReport?.evidenceImages || [
-    'https://images.unsplash.com/photo-1522708323590-d24dbb6b0267?auto=format&fit=crop&w=400&q=80'
-  ]);
+  const [reportDesc, setReportDesc] = useState(currentReport?.overallDescription || '');
+  const [reportPhotos, setReportPhotos] = useState<string[]>(currentReport?.evidenceImages || []);
+  const [reportPhotoUrl, setReportPhotoUrl] = useState('');
+  const [tenantConfirmedReport, setTenantConfirmedReport] = useState(currentReport?.tenantConfirmed || false);
 
   // ASSET_RECEIVE form
-  const [protocolProof, setProtocolProof] = useState(currentProtocol?.paperProofUrl || 'https://images.unsplash.com/photo-1450133064473-71024230f91b?auto=format&fit=crop&w=400&q=80');
+  const [protocolProof, setProtocolProof] = useState(currentProtocol?.paperProofUrl || '');
+  const [keysCardsHandedOver, setKeysCardsHandedOver] = useState(currentProtocol?.keysCardsHandedOver || false);
+  const [protocolError, setProtocolError] = useState<string | null>(null);
 
   // ASSET_INCIDENT_NEW form
-  const [incidentAssetName, setIncidentAssetName] = useState('Bình nóng lạnh');
-  const [incidentDesc, setIncidentDesc] = useState('Đèn báo sáng nhưng nước không nóng');
-  const [incidentStep, setIncidentStep] = useState('Đã hẹn thợ điện nước kiểm tra chiều nay');
-  const [incidentProof, setIncidentProof] = useState('https://images.unsplash.com/photo-1581092160607-ee22621dd758?auto=format&fit=crop&w=400&q=80');
+  const [incidentAssetName, setIncidentAssetName] = useState('');
+  const [incidentDesc, setIncidentDesc] = useState('');
+  const [incidentStep, setIncidentStep] = useState('');
+  const [incidentProof, setIncidentProof] = useState('');
 
   // ASSET_INCIDENT_DETAIL update
   const [updateStep, setUpdateStep] = useState('');
@@ -220,17 +231,18 @@ export const AssetScreens: React.FC = () => {
   if (currentScreenId === 'ASSET_STATUS') {
     const handleSaveReport = (e: React.FormEvent) => {
       e.preventDefault();
-      saveAssetStatusReport({
+      const result = saveAssetStatusReport({
         roomId: currentRoom.id,
-        rentalId: currentRoom.currentRentalId || `LT-${currentRoom.id}-01`,
+        rentalId: activeRentalId || '',
         recordedDate: new Date().toLocaleDateString('vi-VN'),
         overallDescription: reportDesc,
         evidenceImages: reportPhotos,
-        inspector: 'Nguyễn Văn Minh (Chủ nhà)',
-        tenantConfirmed: true
+        inspector: currentUser?.fullName || 'Chủ nhà',
+        tenantConfirmed: tenantConfirmedReport
       });
+      if (!result.success) return;
       // Cross-link 17 to ASSET_RECEIVE
-      navigate('ASSET_RECEIVE', { roomId: currentRoom.id });
+      navigate('ASSET_RECEIVE', { roomId: currentRoom.id, contractId: receiveContract?.id });
     };
 
     return (
@@ -256,6 +268,26 @@ export const AssetScreens: React.FC = () => {
 
             <div>
               <label className="block font-bold text-slate-700 mb-1">Ảnh chụp hiện trường phòng</label>
+              <div className="flex gap-2">
+                <input
+                  type="url"
+                  value={reportPhotoUrl}
+                  onChange={event => setReportPhotoUrl(event.target.value)}
+                  placeholder="Dán đường dẫn ảnh"
+                  className="min-w-0 flex-1 rounded-xl border border-slate-300 px-3 py-2"
+                />
+                <button
+                  type="button"
+                  disabled={!reportPhotoUrl.trim()}
+                  onClick={() => {
+                    setReportPhotos(previous => [...previous, reportPhotoUrl.trim()]);
+                    setReportPhotoUrl('');
+                  }}
+                  className="rounded-xl bg-slate-100 px-3 py-2 font-semibold disabled:opacity-50"
+                >
+                  Thêm ảnh
+                </button>
+              </div>
               <div className="grid grid-cols-2 gap-2">
                 {reportPhotos.map((img, i) => (
                   <div key={i} className="h-24 rounded-xl overflow-hidden border border-slate-200 relative">
@@ -263,6 +295,14 @@ export const AssetScreens: React.FC = () => {
                   </div>
                 ))}
               </div>
+              <label className="mt-2 flex items-center gap-2 text-[11px] text-slate-600">
+                <input
+                  type="checkbox"
+                  checked={tenantConfirmedReport}
+                  onChange={event => setTenantConfirmedReport(event.target.checked)}
+                />
+                Người thuê đã xác nhận hiện trạng
+              </label>
             </div>
 
             <div className="pt-2">
@@ -283,7 +323,16 @@ export const AssetScreens: React.FC = () => {
   // 4. ASSET_RECEIVE Screen (F.7 - Cross-link 18)
   if (currentScreenId === 'ASSET_RECEIVE') {
     const handleSignReceive = () => {
-      signHandoverProtocol(currentRoom.id, currentRoom.currentContractId || 'HD-2026-001', protocolProof);
+      setProtocolError(null);
+      if (!receiveContract) {
+        setProtocolError('Chưa có hợp đồng đã ký cho phòng này.');
+        return;
+      }
+      const result = signHandoverProtocol(currentRoom.id, receiveContract.id, protocolProof, keysCardsHandedOver);
+      if (!result.success) {
+        setProtocolError(result.error || 'Chưa ghi nhận được biên bản bàn giao.');
+        return;
+      }
       // Cross-link 18 to ROOM_IN
       navigate('ROOM_IN', { roomId: currentRoom.id });
     };
@@ -297,6 +346,7 @@ export const AssetScreens: React.FC = () => {
         />
 
         <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-xs space-y-3 text-xs">
+          {protocolError && <p className="rounded-lg border border-rose-200 bg-rose-50 p-2 text-rose-800">{protocolError}</p>}
           <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-2">
             <div className="font-bold text-center text-slate-900 border-b border-slate-200 pb-1">
               BIÊN BẢN BÀN GIAO & TIẾP NHẬN PHÒNG
@@ -308,9 +358,23 @@ export const AssetScreens: React.FC = () => {
 
           <div>
             <label className="block font-bold text-slate-700 mb-1">Ảnh chứng từ biên bản giấy đã ký</label>
-            <div className="h-32 rounded-xl overflow-hidden border border-slate-200 relative mb-1">
-              <img src={protocolProof} alt="Biên bản giấy" className="w-full h-full object-cover" />
-            </div>
+            <input
+              type="url"
+              value={protocolProof}
+              onChange={event => setProtocolProof(event.target.value)}
+              placeholder="Dán đường dẫn ảnh/tệp biên bản đã ký"
+              required
+              className="w-full rounded-xl border border-slate-300 px-3 py-2"
+            />
+            <label className="flex items-start gap-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
+              <input
+                type="checkbox"
+                checked={keysCardsHandedOver}
+                onChange={event => setKeysCardsHandedOver(event.target.checked)}
+                className="mt-0.5"
+              />
+              <span>Xác nhận đã giao chìa khóa và thẻ từ thực tế cho người thuê.</span>
+            </label>
           </div>
 
           <div className="pt-2">
@@ -385,7 +449,7 @@ export const AssetScreens: React.FC = () => {
       e.preventDefault();
       const res = createIncident({
         roomId: currentRoom.id,
-        rentalId: currentRoom.currentRentalId || `LT-${currentRoom.id}-01`,
+        rentalId: activeRentalId || '',
         assetName: incidentAssetName,
         date: new Date().toLocaleDateString('vi-VN'),
         description: incidentDesc,
@@ -398,11 +462,11 @@ export const AssetScreens: React.FC = () => {
           {
             date: new Date().toLocaleString('vi-VN'),
             content: `Khởi tạo báo cáo sự cố: ${incidentDesc}`,
-            by: 'Chủ nhà'
+            by: currentUser?.fullName || 'Chủ nhà'
           }
         ]
       });
-      navigate('ASSET_INCIDENT_DETAIL', { incidentId: res.incidentId, roomId: currentRoom.id });
+      if (res.success) navigate('ASSET_INCIDENT_DETAIL', { incidentId: res.incidentId, roomId: currentRoom.id });
     };
 
     return (

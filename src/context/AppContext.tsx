@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
+import * as QRCode from 'qrcode';
 import type { Session, User } from '@supabase/supabase-js';
 import {
   ScreenId,
@@ -21,7 +22,8 @@ import {
   PaymentNotice,
   PaymentTransaction,
   OverdueDebt,
-  DepositSettlement
+  DepositSettlement,
+  InitialPayment
 } from '../types';
 import {
   INITIAL_ROOMS,
@@ -67,6 +69,7 @@ interface PersistedAppData {
   tenants: Tenant[];
   coResidents: CoResident[];
   contracts: Contract[];
+  initialPayments: InitialPayment[];
   rentalTerms: Record<string, RentalTerms>;
   assetItems: AssetInventoryItem[];
   assetReports: AssetStatusReport[];
@@ -90,6 +93,10 @@ interface AppContextType {
   // Auth
   isAuthenticated: boolean;
   currentUser: { id: string; username: string; fullName: string; role: 'CHU_NHA'; phone: string; email: string } | null;
+  isFirstPasswordChangeRequired: boolean;
+  failedAttempts: number;
+  lockUntil: number | null;
+  sessionRemainingMinutes: number;
   authLoading: boolean;
   dataLoading: boolean;
   isConfigured: boolean;
@@ -97,6 +104,7 @@ interface AppContextType {
   saveStatus: 'idle' | 'saving' | 'saved' | 'error' | 'conflict';
   saveError: string | null;
   login: (email: string, pass: string) => Promise<{ success: boolean; error?: string }>;
+  changeFirstPassword: (newPass: string, confirmPass: string) => Promise<{ success: boolean; error?: string }>;
   forgotPassword: (email: string) => Promise<{ success: boolean; message: string }>;
   resetPassword: (newPass: string) => Promise<{ success: boolean; error?: string }>;
   changePassword: (newPass: string) => Promise<{ success: boolean; error?: string }>;
@@ -118,6 +126,7 @@ interface AppContextType {
   tenants: Tenant[];
   coResidents: CoResident[];
   contracts: Contract[];
+  initialPayments: InitialPayment[];
   rentalTerms: Record<string, RentalTerms>;
   assetItems: AssetInventoryItem[];
   assetReports: AssetStatusReport[];
@@ -139,11 +148,11 @@ interface AppContextType {
   // Entity Actions (Business operations)
   createRoom: (room: Omit<Room, 'id' | 'createdAt' | 'updatedAt' | 'status'>) => { success: boolean; error?: string; roomId?: string };
   updateRoom: (roomId: string, data: Partial<Room>) => { success: boolean; error?: string };
-  saveRentalTerms: (terms: RentalTerms) => void;
-  createDraftContract: (terms: RentalTerms) => { success: boolean; contractId: string };
+  saveRentalTerms: (terms: RentalTerms) => { success: boolean; error?: string };
+  createDraftContract: (terms: RentalTerms) => { success: boolean; contractId: string; error?: string };
   editDraftContract: (contractId: string, updates: Partial<Contract>) => { success: boolean; error?: string };
   signContract: (contractId: string, signedDate: string, proofUrl: string) => { success: boolean; error?: string };
-  renewContract: (parentContractId: string, durationMonths: number, startDate: string, endDate: string) => { success: boolean; contractId: string };
+  renewContract: (parentContractId: string, durationMonths: number, startDate: string, endDate: string) => { success: boolean; contractId: string; error?: string };
   signRenewContract: (contractId: string, signedDate: string, proofUrl: string) => { success: boolean; error?: string };
   confirmInitialPayment: (roomId: string, amount: number, refCode: string) => { success: boolean; error?: string };
   checkInRoom: (roomId: string) => { success: boolean; error?: string; missing?: string[] };
@@ -156,8 +165,8 @@ interface AppContextType {
 
   // Asset actions
   saveAssetInventory: (roomId: string, items: AssetInventoryItem[]) => void;
-  saveAssetStatusReport: (report: Omit<AssetStatusReport, 'id'>) => void;
-  signHandoverProtocol: (roomId: string, contractId: string, proofUrl: string) => void;
+  saveAssetStatusReport: (report: Omit<AssetStatusReport, 'id'>) => { success: boolean };
+  signHandoverProtocol: (roomId: string, contractId: string, proofUrl: string, keysCardsHandedOver: boolean) => { success: boolean; error?: string };
   createIncident: (incident: Omit<AssetIncident, 'id' | 'code'>) => { success: boolean; incidentId: string };
   updateIncident: (incidentId: string, step: string, status: AssetIncident['status'], note: string) => void;
 
@@ -167,17 +176,17 @@ interface AppContextType {
   addCheckoutPlanFeedback: (roomId: string, channel: string, content: string, newDate?: string) => void;
   createCheckoutDraft: (roomId: string) => { success: boolean; protocolId: string };
   confirmActualReturn305: (roomId: string, finalElectric: number, finalWater: number) => { success: boolean; error?: string };
-  markReturnPending: (roomId: string, reason: string) => void;
+  markReturnPending: (roomId: string, reason: string) => { success: boolean; error?: string };
   saveAssetComparison: (roomId: string, itemsWithDifferences: { id: string; difference: string; compAmount: number; isDamaged: boolean }[]) => void;
   signCheckoutFinalProtocol: (roomId: string, proofUrl: string) => { success: boolean; error?: string };
   verifyReturnAndFreeRoom: (roomId: string) => { success: boolean; error?: string; unmetReasons?: string[] };
 
   // Billing actions
-  recordMeterReading: (periodId: string, roomId: string, elNew: number, waNew: number, elProof?: string, waProof?: string) => { success: boolean; error?: string };
+  recordMeterReading: (periodId: string, roomId: string, elNew: number, waNew: number, elProof?: string, waProof?: string, elOldInput?: number, waOldInput?: number) => { success: boolean; error?: string };
   editMeterReading: (readingId: string, elNew: number, waNew: number, reason: string) => { success: boolean; error?: string };
   calculatePeriodForRoom: (periodId: string, roomId: string) => { success: boolean; calcId?: string };
   reconcilePeriodCalculation: (calcId: string, notes: string) => void;
-  issuePaymentNoticeQR: (calcId: string, dueDate: string) => { success: boolean; noticeId: string };
+  issuePaymentNoticeQR: (calcId: string, dueDate: string) => Promise<{ success: boolean; noticeId: string }>;
   confirmPaymentReceived: (noticeId: string, amount: number, refCode: string, proofUrl?: string) => { success: boolean; error?: string };
   correctPaymentReceipt: (transactionId: string, newAmount: number, reason: string, proofUrl?: string) => { success: boolean; error?: string };
 
@@ -191,8 +200,8 @@ interface AppContextType {
   finalizeDepositSettlement: (settlementId: string, proofUrl: string, method: DepositSettlement['paymentMethod']) => { success: boolean };
 
   // Config actions
-  saveTariffConfig: (newTariff: Omit<TariffConfig, 'id' | 'isActive'>) => void;
-  saveBankConfig: (newBank: Omit<BankConfig, 'id' | 'isActive'>) => void;
+  saveTariffConfig: (newTariff: Omit<TariffConfig, 'id' | 'isActive'>) => { success: boolean };
+  saveBankConfig: (newBank: Omit<BankConfig, 'id' | 'isActive'>) => { success: boolean };
 
   toastMessage: string | null;
   showToast: (msg: string) => void;
@@ -205,6 +214,7 @@ const createAppData = (): PersistedAppData => ({
   tenants: INITIAL_TENANTS,
   coResidents: INITIAL_CO_RESIDENTS,
   contracts: INITIAL_CONTRACTS,
+  initialPayments: [],
   rentalTerms: INITIAL_RENTAL_TERMS,
   assetItems: INITIAL_ASSET_ITEMS,
   assetReports: INITIAL_ASSET_REPORTS,
@@ -241,12 +251,71 @@ const mapAuthUser = (user: User) => ({
   email: user.email || ''
 });
 
+const LOGIN_GUARD_KEY = 'greenhouse.login-guard.v1';
+const SESSION_IDLE_LIMIT_MS = 30 * 60 * 1000;
+const LOGIN_LOCK_MS = 15 * 60 * 1000;
+
+const parseLocalDate = (value: string): Date | null => {
+  const vietnameseDate = value.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (vietnameseDate) {
+    const [, day, month, year] = vietnameseDate;
+    return new Date(Number(year), Number(month) - 1, Number(day));
+  }
+  const isoDate = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (isoDate) {
+    const [, year, month, day] = isoDate;
+    return new Date(Number(year), Number(month) - 1, Number(day));
+  }
+  return null;
+};
+
+const createVietQrPayload = (bankCode: string, accountNumber: string, amount: number, transferContent: string) => {
+  const field = (id: string, value: string) => `${id}${value.length.toString().padStart(2, '0')}${value}`;
+  const merchantAccount = field('00', 'A000000727') +
+    field('01', bankCode) +
+    field('02', accountNumber) +
+    field('03', 'QRIBFTTA');
+  const additionalData = field('08', transferContent.slice(0, 25));
+  const payload = `000201010212${field('38', merchantAccount)}5303704${field('54', String(amount))}5802VN${field('62', additionalData)}6304`;
+  let crc = 0xffff;
+  for (const character of payload) {
+    crc ^= character.charCodeAt(0) << 8;
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = crc & 0x8000 ? (crc << 1) ^ 0x1021 : crc << 1;
+      crc &= 0xffff;
+    }
+  }
+  return `${payload}${crc.toString(16).toUpperCase().padStart(4, '0')}`;
+};
+
+const readLoginGuard = () => {
+  try {
+    const stored = localStorage.getItem(LOGIN_GUARD_KEY);
+    if (!stored) return { failedAttempts: 0, lockUntil: null as number | null };
+    const parsed: unknown = JSON.parse(stored);
+    if (typeof parsed !== 'object' || parsed === null) {
+      throw new Error('Dữ liệu giới hạn đăng nhập không đúng định dạng.');
+    }
+    const guard = parsed as { failedAttempts?: number; lockUntil?: number | null };
+    return {
+      failedAttempts: Number.isInteger(guard.failedAttempts) ? Math.max(0, guard.failedAttempts || 0) : 0,
+      lockUntil: Number.isFinite(guard.lockUntil) ? guard.lockUntil || null : null
+    };
+  } catch (error) {
+    console.error('Không thể đọc số lần đăng nhập sai.', error);
+    return { failedAttempts: 0, lockUntil: null as number | null };
+  }
+};
+
 const getErrorMessage = (error: unknown) =>
   error instanceof Error ? error.message : 'Đã xảy ra lỗi kết nối. Vui lòng thử lại.';
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [currentUser, setCurrentUser] = useState<AppContextType['currentUser']>(null);
+  const [isFirstPasswordChangeRequired, setIsFirstPasswordChangeRequired] = useState(false);
+  const [loginGuard, setLoginGuard] = useState(readLoginGuard);
+  const [sessionRemainingMinutes, setSessionRemainingMinutes] = useState(30);
   const [authLoading, setAuthLoading] = useState(true);
   const [dataLoading, setDataLoading] = useState(false);
   const [databaseError, setDatabaseError] = useState<string | null>(null);
@@ -270,6 +339,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [tenants, setTenants] = useState<Tenant[]>(INITIAL_TENANTS);
   const [coResidents, setCoResidents] = useState<CoResident[]>(INITIAL_CO_RESIDENTS);
   const [contracts, setContracts] = useState<Contract[]>(INITIAL_CONTRACTS);
+  const [initialPayments, setInitialPayments] = useState<InitialPayment[]>([]);
   const [rentalTerms, setRentalTerms] = useState<Record<string, RentalTerms>>(INITIAL_RENTAL_TERMS);
   const [assetItems, setAssetItems] = useState<AssetInventoryItem[]>(INITIAL_ASSET_ITEMS);
   const [assetReports, setAssetReports] = useState<AssetStatusReport[]>(INITIAL_ASSET_REPORTS);
@@ -298,6 +368,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       tenants: incoming.tenants || defaults.tenants,
       coResidents: incoming.coResidents || defaults.coResidents,
       contracts: incoming.contracts || defaults.contracts,
+      initialPayments: incoming.initialPayments || defaults.initialPayments,
       rentalTerms: incoming.rentalTerms || defaults.rentalTerms,
       assetItems: incoming.assetItems || defaults.assetItems,
       assetReports: incoming.assetReports || defaults.assetReports,
@@ -320,6 +391,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setTenants(normalized.tenants);
     setCoResidents(normalized.coResidents);
     setContracts(normalized.contracts);
+    setInitialPayments(normalized.initialPayments);
     setRentalTerms(normalized.rentalTerms);
     setAssetItems(normalized.assetItems);
     setAssetReports(normalized.assetReports);
@@ -352,6 +424,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const user = session?.user ?? null;
       setCurrentUser(user ? mapAuthUser(user) : null);
       setIsAuthenticated(Boolean(user));
+      setIsFirstPasswordChangeRequired(user?.user_metadata.must_change_password === true);
       setDataLoading(Boolean(user));
       if (!user) setDataReadyForUserId(null);
     };
@@ -381,8 +454,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setCurrentScreenId('RESET');
         setHistoryStack([{ screenId: 'RESET' }]);
       } else if (event === 'SIGNED_IN') {
-        setCurrentScreenId('HOME');
-        setHistoryStack([{ screenId: 'HOME' }]);
+        const screenId = session?.user.user_metadata.must_change_password === true ? 'FIRSTPASS' : 'HOME';
+        setCurrentScreenId(screenId);
+        setHistoryStack([{ screenId }]);
       } else if (event === 'SIGNED_OUT') {
         setCurrentScreenId('LOGIN');
         setHistoryStack([{ screenId: 'LOGIN' }]);
@@ -481,6 +555,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       tenants,
       coResidents,
       contracts,
+      initialPayments,
       rentalTerms,
       assetItems,
       assetReports,
@@ -546,6 +621,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     tenants,
     coResidents,
     contracts,
+    initialPayments,
     rentalTerms,
     assetItems,
     assetReports,
@@ -629,20 +705,66 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // Auth actions
+  const saveLoginGuard = (failedAttempts: number, lockUntil: number | null) => {
+    const nextGuard = { failedAttempts, lockUntil };
+    setLoginGuard(nextGuard);
+    try {
+      if (failedAttempts === 0 && !lockUntil) localStorage.removeItem(LOGIN_GUARD_KEY);
+      else localStorage.setItem(LOGIN_GUARD_KEY, JSON.stringify(nextGuard));
+    } catch (error) {
+      console.error('Không thể lưu giới hạn đăng nhập.', error);
+      showToast('Không lưu được trạng thái bảo vệ đăng nhập trên thiết bị này.');
+    }
+  };
+
   const login = async (email: string, pass: string) => {
     if (!supabase) return { success: false, error: 'Chưa cấu hình kết nối dữ liệu.' };
+    if (loginGuard.lockUntil && Date.now() < loginGuard.lockUntil) {
+      const remainingMinutes = Math.ceil((loginGuard.lockUntil - Date.now()) / 60000);
+      return { success: false, error: `Đã nhập sai 5 lần. Hãy thử lại sau ${remainingMinutes} phút.` };
+    }
+    const previousAttempts = loginGuard.lockUntil ? 0 : loginGuard.failedAttempts;
+    if (loginGuard.lockUntil) saveLoginGuard(0, null);
     try {
       const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password: pass });
       if (error) {
-        const message = error.message.toLowerCase().includes('invalid login credentials')
-          ? 'Email hoặc mật khẩu chưa đúng.'
-          : error.message;
-        return { success: false, error: message };
+        const invalidCredentials = error.message.toLowerCase().includes('invalid login credentials');
+        if (!invalidCredentials) return { success: false, error: error.message };
+        const failedAttempts = previousAttempts + 1;
+        const lockUntil = failedAttempts >= 5 ? Date.now() + LOGIN_LOCK_MS : null;
+        saveLoginGuard(lockUntil ? 5 : failedAttempts, lockUntil);
+        return {
+          success: false,
+          error: lockUntil
+            ? 'Đã nhập sai 5 lần. Tài khoản tạm khóa 15 phút.'
+            : `Email hoặc mật khẩu chưa đúng. Còn ${5 - failedAttempts} lần thử.`
+        };
       }
+      saveLoginGuard(0, null);
       return { success: true };
     } catch (error) {
       console.error('Không thể đăng nhập Supabase.', error);
       return { success: false, error: 'Không kết nối được máy chủ. Kiểm tra mạng rồi thử lại.' };
+    }
+  };
+
+  const changeFirstPassword = async (newPass: string, confirmPass: string) => {
+    if (!supabase) return { success: false, error: 'Chưa cấu hình kết nối dữ liệu.' };
+    if (newPass.length < 12) return { success: false, error: 'Mật khẩu cần có ít nhất 12 ký tự.' };
+    if (newPass !== confirmPass) return { success: false, error: 'Hai mật khẩu chưa khớp.' };
+    try {
+      const { error } = await supabase.auth.updateUser({
+        password: newPass,
+        data: { must_change_password: false }
+      });
+      if (error) return { success: false, error: error.message };
+      setIsFirstPasswordChangeRequired(false);
+      navigate('HOME', {}, true);
+      showToast('Đã đổi mật khẩu. Bạn có thể bắt đầu sử dụng hệ thống.');
+      return { success: true };
+    } catch (error) {
+      console.error('Không thể đổi mật khẩu lần đầu.', error);
+      return { success: false, error: 'Không đổi được mật khẩu. Vui lòng thử lại.' };
     }
   };
 
@@ -662,7 +784,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const resetPassword = async (newPass: string) => {
     if (!supabase) return { success: false, error: 'Chưa cấu hình kết nối dữ liệu.' };
-    if (newPass.length < 10) return { success: false, error: 'Mật khẩu cần có ít nhất 10 ký tự.' };
+    if (newPass.length < 12) return { success: false, error: 'Mật khẩu cần có ít nhất 12 ký tự.' };
     try {
       const { error } = await supabase.auth.updateUser({ password: newPass });
       if (error) return { success: false, error: error.message };
@@ -677,7 +799,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const changePassword = async (newPass: string) => {
     if (!supabase) return { success: false, error: 'Chưa cấu hình kết nối dữ liệu.' };
-    if (newPass.length < 10) return { success: false, error: 'Mật khẩu cần có ít nhất 10 ký tự.' };
+    if (newPass.length < 12) return { success: false, error: 'Mật khẩu cần có ít nhất 12 ký tự.' };
     try {
       const { error } = await supabase.auth.updateUser({ password: newPass });
       if (error) return { success: false, error: error.message };
@@ -704,6 +826,45 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       showToast('Không đăng xuất được. Vui lòng thử lại.');
     }
   };
+
+  useEffect(() => {
+    if (!isAuthenticated) {
+      setSessionRemainingMinutes(30);
+      return;
+    }
+
+    let lastActivity = Date.now();
+    let expirationStarted = false;
+    const updateActivity = () => {
+      lastActivity = Date.now();
+    };
+    const activityEvents: (keyof WindowEventMap)[] = ['pointerdown', 'keydown', 'touchstart', 'scroll'];
+    activityEvents.forEach(event => window.addEventListener(event, updateActivity, { passive: true }));
+
+    const timer = window.setInterval(() => {
+      const remaining = Math.max(0, SESSION_IDLE_LIMIT_MS - (Date.now() - lastActivity));
+      setSessionRemainingMinutes(Math.ceil(remaining / 60000));
+      if (remaining === 0 && !expirationStarted && supabase) {
+        expirationStarted = true;
+        supabase.auth.signOut().then(({ error }) => {
+          if (error) {
+            console.error('Không thể kết thúc phiên đã hết hạn.', error);
+            showToast('Phiên đã hết hạn nhưng chưa đăng xuất được. Hãy thử đăng xuất lại.');
+          } else {
+            showToast('Phiên đã hết hạn. Vui lòng đăng nhập lại.');
+          }
+        }).catch(error => {
+          console.error('Không thể kết thúc phiên đã hết hạn.', error);
+          showToast('Phiên đã hết hạn nhưng chưa đăng xuất được. Hãy thử đăng xuất lại.');
+        });
+      }
+    }, 1000);
+
+    return () => {
+      window.clearInterval(timer);
+      activityEvents.forEach(event => window.removeEventListener(event, updateActivity));
+    };
+  }, [isAuthenticated]);
 
   // Room methods
   const createRoom = (data: Omit<Room, 'id' | 'createdAt' | 'updatedAt' | 'status'>) => {
@@ -735,28 +896,53 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const saveRentalTerms = (terms: RentalTerms) => {
+    const room = rooms.find(item => item.id === terms.roomId);
+    const tenant = tenants.find(item => item.id === terms.tenantId);
+    const startDate = parseLocalDate(terms.startDate);
+    const endDate = parseLocalDate(terms.endDate);
+    if (!room || room.status !== 'TRONG') return { success: false, error: 'Chỉ chọn được phòng đang trống.' };
+    if (!tenant || tenant.status !== 'TIEM_NANG') return { success: false, error: 'Chỉ chọn được hồ sơ khách tiềm năng.' };
+    if (!Number.isInteger(terms.durationMonths) || terms.durationMonths < 1 ||
+      !Number.isFinite(terms.monthlyRent) || terms.monthlyRent <= 0 ||
+      !Number.isFinite(terms.serviceFeePerMonth) || terms.serviceFeePerMonth < 0) {
+      return { success: false, error: 'Thời hạn, tiền thuê hoặc phí dịch vụ chưa hợp lệ.' };
+    }
+    if (terms.depositAmount !== terms.monthlyRent || terms.firstMonthRent !== terms.monthlyRent) {
+      return { success: false, error: 'Tiền cọc và tháng thuê đầu phải bằng đúng một tháng tiền thuê.' };
+    }
+    if (!startDate || !endDate || endDate <= startDate) {
+      return { success: false, error: 'Ngày bắt đầu và ngày kết thúc chưa hợp lệ.' };
+    }
     setRentalTerms(prev => ({ ...prev, [terms.roomId]: terms }));
     addAuditLog('THOA_THUAN_DIEU_KIEN_THUE', 'RENTAL_TERMS', terms.roomId, `Thống nhất điều kiện thuê cho phòng ${terms.roomId}`);
     showToast('Đã lưu thỏa thuận điều kiện thuê.');
+    return { success: true };
   };
 
   const createDraftContract = (terms: RentalTerms) => {
-    const newContractId = `HD-2026-${Math.floor(100 + Math.random() * 900)}`;
+    const room = rooms.find(item => item.id === terms.roomId);
+    const tenant = tenants.find(item => item.id === terms.tenantId);
+    const savedTerms = rentalTerms[terms.roomId];
+    if (!room || room.status !== 'TRONG' || !tenant || tenant.status !== 'TIEM_NANG' ||
+      !savedTerms || savedTerms.tenantId !== tenant.id) {
+      return { success: false, contractId: '', error: 'Phòng, khách hoặc thỏa thuận thuê không còn hợp lệ.' };
+    }
+    const newContractId = `HD-${new Date().getFullYear()}-${Date.now()}`;
     const newContract: Contract = {
       id: newContractId,
       code: newContractId,
-      roomId: terms.roomId,
-      tenantId: terms.tenantId,
+      roomId: savedTerms.roomId,
+      tenantId: savedTerms.tenantId,
       rentalId: `LT-${terms.roomId}-${Date.now().toString().slice(-4)}`,
       type: 'LAN_DAU',
-      depositAmount: terms.depositAmount, // 1 month
+      depositAmount: savedTerms.depositAmount, // 1 month
       isInheritedDeposit: false,
-      firstMonthRent: terms.firstMonthRent,
-      monthlyRent: terms.monthlyRent,
-      startDate: terms.startDate,
-      endDate: terms.endDate,
+      firstMonthRent: savedTerms.firstMonthRent,
+      monthlyRent: savedTerms.monthlyRent,
+      startDate: savedTerms.startDate,
+      endDate: savedTerms.endDate,
       status: 'NHAP',
-      terms: `Hợp đồng thuê phòng ${terms.roomId} thời hạn ${terms.durationMonths} tháng. Tiền cọc 1 tháng (${terms.depositAmount.toLocaleString()}đ), tiền thuê tháng đầu (${terms.firstMonthRent.toLocaleString()}đ).`,
+      terms: `Hợp đồng thuê phòng ${savedTerms.roomId} thời hạn ${savedTerms.durationMonths} tháng. Tiền cọc 1 tháng (${savedTerms.depositAmount.toLocaleString()}đ), tiền thuê tháng đầu (${savedTerms.firstMonthRent.toLocaleString()}đ).`,
       createdAt: new Date().toISOString().split('T')[0],
       updatedAt: new Date().toISOString().split('T')[0]
     };
@@ -778,11 +964,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const signContract = (contractId: string, signedDate: string, proofUrl: string) => {
+    const contract = contracts.find(c => c.id === contractId);
+    if (!contract || contract.status !== 'NHAP') return { success: false, error: 'Chỉ ghi nhận hợp đồng đang ở trạng thái Nháp.' };
+    if (!parseLocalDate(signedDate) || !proofUrl.trim()) {
+      return { success: false, error: 'Cần nhập ngày ký hợp lệ và chứng từ hợp đồng đã ký.' };
+    }
     setContracts(prev => prev.map(c => c.id === contractId ? {
       ...c,
       status: 'DA_KY',
       signedDate,
-      paperContractProofUrl: proofUrl || 'https://images.unsplash.com/photo-1450133064473-71024230f91b?auto=format&fit=crop&w=400&q=80',
+      paperContractProofUrl: proofUrl.trim(),
       updatedAt: new Date().toISOString().split('T')[0]
     } : c));
     addAuditLog('GHI_NHAN_HOP_DONG_DA_KY', 'CONTRACT', contractId, `Ghi nhận hợp đồng giấy đã ký ngày ${signedDate}`);
@@ -792,15 +983,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const renewContract = (parentContractId: string, durationMonths: number, startDate: string, endDate: string) => {
     const parent = contracts.find(c => c.id === parentContractId);
-    if (!parent) return { success: false, contractId: '' };
+    if (!parent || parent.status !== 'HIEU_LUC') return { success: false, contractId: '', error: 'Chỉ gia hạn được hợp đồng đang có hiệu lực.' };
+    if (!Number.isInteger(durationMonths) || durationMonths < 1 ||
+      !parseLocalDate(startDate) || !parseLocalDate(endDate) ||
+      parseLocalDate(endDate)! <= parseLocalDate(startDate)!) {
+      return { success: false, contractId: '', error: 'Thời hạn hoặc ngày gia hạn chưa hợp lệ.' };
+    }
 
-    const newContractId = `${parent.code}-NT`;
+    const newContractId = `${parent.code}-NT-${Date.now()}`;
     const newContract: Contract = {
       id: newContractId,
       code: newContractId,
       roomId: parent.roomId,
       tenantId: parent.tenantId,
-      rentalId: `LT-${parent.roomId}-NT-${Date.now().toString().slice(-3)}`,
+      rentalId: `LT-${parent.roomId}-NT-${Date.now()}`,
       type: 'NOI_TIEP',
       parentContractId,
       depositAmount: parent.depositAmount, // KẾ THỪA CỌC CŨ
@@ -824,17 +1020,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const signRenewContract = (contractId: string, signedDate: string, proofUrl: string) => {
     const contract = contracts.find(c => c.id === contractId);
     if (!contract) return { success: false, error: 'Hợp đồng không tồn tại.' };
+    const parent = contract.parentContractId && contracts.find(c => c.id === contract.parentContractId);
+    if (contract.type !== 'NOI_TIEP' || contract.status !== 'NHAP' || !parent || parent.status !== 'HIEU_LUC') {
+      return { success: false, error: 'Hợp đồng nối tiếp hoặc hợp đồng hiện tại không còn hợp lệ.' };
+    }
+    if (!parseLocalDate(signedDate) || !proofUrl.trim()) {
+      return { success: false, error: 'Cần nhập ngày ký hợp lệ và chứng từ hợp đồng đã ký.' };
+    }
 
     setContracts(prev => prev.map(c => c.id === contractId ? {
       ...c,
       status: 'HIEU_LUC',
       signedDate,
-      paperContractProofUrl: proofUrl || 'https://images.unsplash.com/photo-1450133064473-71024230f91b?auto=format&fit=crop&w=400&q=80',
+      paperContractProofUrl: proofUrl.trim(),
       updatedAt: new Date().toISOString().split('T')[0]
-    } : c));
+    } : c.id === parent.id ? { ...c, status: 'KET_THUC' } : c));
+    setRooms(prev => prev.map(room => room.id === contract.roomId ? {
+      ...room,
+      status: 'DANG_THUE',
+      currentContractId: contract.id,
+      currentTenantId: contract.tenantId,
+      currentRentalId: contract.rentalId,
+      updatedAt: new Date().toISOString().split('T')[0]
+    } : room));
 
     // Nghiệp vụ: Tự động hủy kế hoạch trả phòng cũ theo sự kiện Hợp đồng nối tiếp có hiệu lực
-    setCheckoutPlans(prev => prev.map(p => p.roomId === contract.roomId && p.status === 'DANG_CHO' ? {
+    setCheckoutPlans(prev => prev.map(p => p.rentalId === parent.rentalId && p.status === 'DANG_CHO' ? {
       ...p,
       status: 'DA_HUY_DO_NOI_TIEP',
       history: [
@@ -856,16 +1067,36 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const confirmInitialPayment = (roomId: string, amount: number, refCode: string) => {
     const room = rooms.find(r => r.id === roomId);
     if (!room) return { success: false, error: 'Phòng không tồn tại.' };
-
-    const expectedTotal = room.basePrice * 2; // 1 month deposit + 1 month first rent
+    if (room.status !== 'TRONG') return { success: false, error: 'Chỉ xác nhận tiền nhận phòng cho phòng đang trống.' };
+    const contract = contracts.find(c => c.roomId === roomId && c.type === 'LAN_DAU' && c.status === 'DA_KY');
+    if (!contract) return { success: false, error: 'Cần có hợp đồng lần đầu đã ký trước khi xác nhận tiền.' };
+    if (initialPayments.some(payment => payment.contractId === contract.id)) {
+      return { success: false, error: 'Khoản thanh toán ban đầu của hợp đồng này đã được xác nhận.' };
+    }
+    if (!refCode.trim()) return { success: false, error: 'Cần nhập mã giao dịch ngân hàng đã đối chiếu.' };
+    if (initialPayments.some(payment => payment.bankTransactionRef === refCode.trim())) {
+      return { success: false, error: 'Mã giao dịch này đã được dùng cho một khoản thanh toán khác.' };
+    }
+    const expectedTotal = contract.depositAmount + contract.firstMonthRent;
     if (amount !== expectedTotal) {
       return {
         success: false,
-        error: `Số tiền thanh toán ban đầu phải ĐỦ ĐÚNG 1 tháng cọc (${room.basePrice.toLocaleString()} đ) + 1 tháng thuê đầu (${room.basePrice.toLocaleString()} đ) = ${expectedTotal.toLocaleString()} đ. Không cho phép thanh toán thiếu.`
+        error: `Số tiền cần khớp đúng tiền cọc (${contract.depositAmount.toLocaleString()} đ) và tiền thuê đầu (${contract.firstMonthRent.toLocaleString()} đ), tổng ${expectedTotal.toLocaleString()} đ.`
       };
     }
 
-    addAuditLog('XAC_NHAN_THANH_TOAN_BAN_DAU', 'PAYMENT', roomId, `Đã đối chiếu chuyển khoản đủ ${amount.toLocaleString()} đ, mã GD ${refCode}`);
+    const payment: InitialPayment = {
+      id: `IP-${contract.id}`,
+      contractId: contract.id,
+      roomId,
+      tenantId: contract.tenantId,
+      amount,
+      bankTransactionRef: refCode.trim(),
+      receivedDate: new Date().toLocaleDateString('vi-VN'),
+      confirmedBy: currentUser?.fullName || 'Chủ nhà'
+    };
+    setInitialPayments(prev => [...prev, payment]);
+    addAuditLog('XAC_NHAN_THANH_TOAN_BAN_DAU', 'PAYMENT', payment.id, `Đã đối chiếu đủ ${amount.toLocaleString()} đ cho hợp đồng ${contract.code}, mã GD ${refCode.trim()}`);
     showToast('Đã xác nhận thanh toán ban đầu (1 tháng cọc + 1 tháng thuê đầu) thành công!');
     return { success: true };
   };
@@ -873,12 +1104,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const checkInRoom = (roomId: string) => {
     const room = rooms.find(r => r.id === roomId);
     if (!room) return { success: false, error: 'Phòng không tồn tại.' };
+    if (room.status !== 'TRONG') return { success: false, error: 'Phòng phải ở trạng thái Trống mới được nhận phòng.' };
 
-    const contract = contracts.find(c => c.roomId === roomId && (c.status === 'DA_KY' || c.status === 'HIEU_LUC'));
-    const handover = handoverProtocols.find(h => h.roomId === roomId && h.paperHandoverSigned);
+    const contract = contracts.find(c => c.roomId === roomId && c.status === 'DA_KY');
+    const handover = contract && handoverProtocols.find(h =>
+      h.roomId === roomId && h.contractId === contract.id && h.rentalId === contract.rentalId &&
+      h.paperHandoverSigned && h.keysCardsHandedOver
+    );
 
     const missing: string[] = [];
     if (!contract) missing.push('Chưa có hợp đồng giấy đã ký hai bên');
+    if (contract?.type === 'LAN_DAU' && !initialPayments.some(payment => payment.contractId === contract.id)) {
+      missing.push('Chưa xác nhận đủ tiền cọc và tiền thuê tháng đầu');
+    }
     if (!handover) missing.push('Chưa ký biên bản bàn giao và kiểm kê tài sản thực tế');
 
     if (missing.length > 0) {
@@ -897,6 +1135,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     if (contract) {
       setContracts(prev => prev.map(c => c.id === contract.id ? { ...c, status: 'HIEU_LUC' } : c));
+      setTenants(prev => prev.map(tenant => tenant.id === contract.tenantId ? {
+        ...tenant,
+        status: 'DANG_THUE',
+        currentRoomId: roomId,
+        updatedAt: new Date().toISOString().split('T')[0]
+      } : tenant));
     }
 
     addAuditLog('TIEP_NHAN_PHONG_THANH_CONG', 'ROOM', roomId, `Hoàn tất tiếp nhận phòng ${room.roomNumber}, trạng thái cập nhật Đang thuê`);
@@ -951,12 +1195,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Asset methods
   const saveAssetInventory = (roomId: string, items: AssetInventoryItem[]) => {
-    setAssetItems(prev => [...prev.filter(item => item.roomId !== roomId), ...items]);
+    const room = rooms.find(item => item.id === roomId);
+    const activeRentalId = room?.currentRentalId || contracts.find(contract =>
+      contract.roomId === roomId && contract.status === 'DA_KY'
+    )?.rentalId;
+    if (!activeRentalId || items.some(item => item.roomId !== roomId || item.rentalId !== activeRentalId)) {
+      showToast('Danh mục tài sản chưa gắn đúng lượt thuê của phòng.');
+      return;
+    }
+    setAssetItems(prev => [...prev.filter(item => item.rentalId !== activeRentalId), ...items]);
     addAuditLog('LUU_KIEM_KE_TAI_SAN', 'ASSET', roomId, `Lưu danh mục kiểm kê ${items.length} tài sản phòng ${roomId}`);
     showToast('Đã lưu kiểm kê tài sản phòng.');
   };
 
   const saveAssetStatusReport = (report: Omit<AssetStatusReport, 'id'>) => {
+    const room = rooms.find(item => item.id === report.roomId);
+    const activeRentalId = room?.currentRentalId || contracts.find(contract =>
+      contract.roomId === report.roomId && contract.status === 'DA_KY'
+    )?.rentalId;
+    if (!activeRentalId || report.rentalId !== activeRentalId || !report.overallDescription.trim() || report.evidenceImages.length === 0) {
+      showToast('Cần lượt thuê, mô tả hiện trạng và ít nhất một chứng cứ thực tế.');
+      return { success: false };
+    }
     const newReport: AssetStatusReport = {
       ...report,
       id: `RP-${Date.now().toString().slice(-4)}`
@@ -964,28 +1224,45 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setAssetReports(prev => [newReport, ...prev]);
     addAuditLog('LUU_HIEN_TRANG_BAN_GIAO', 'ASSET', report.roomId, 'Ghi nhận hiện trạng và hình ảnh bàn giao');
     showToast('Đã lưu hiện trạng bàn giao phòng.');
+    return { success: true };
   };
 
-  const signHandoverProtocol = (roomId: string, contractId: string, proofUrl: string) => {
+  const signHandoverProtocol = (roomId: string, contractId: string, proofUrl: string, keysCardsHandedOver: boolean) => {
+    const room = rooms.find(item => item.id === roomId);
+    const contract = contracts.find(item => item.id === contractId && item.roomId === roomId);
+    if (!room || !contract) return { success: false, error: 'Không tìm thấy phòng hoặc hợp đồng tương ứng.' };
+    if (contract.status !== 'DA_KY') return { success: false, error: 'Chỉ lập biên bản bàn giao cho hợp đồng đã ký.' };
+    if (!proofUrl.trim()) return { success: false, error: 'Cần nhập đường dẫn hoặc thông tin chứng từ biên bản đã ký.' };
+    if (!keysCardsHandedOver) return { success: false, error: 'Cần xác nhận đã bàn giao chìa khóa và thẻ từ.' };
     const newProtocol: AssetHandoverProtocol = {
-      id: `BB-${roomId}`,
+      id: `BB-${contract.id}`,
       roomId,
-      rentalId: `LT-${roomId}-01`,
+      rentalId: contract.rentalId,
       contractId,
       date: new Date().toLocaleDateString('vi-VN'),
       paperHandoverSigned: true,
-      paperProofUrl: proofUrl || 'https://images.unsplash.com/photo-1450133064473-71024230f91b?auto=format&fit=crop&w=400&q=80',
+      keysCardsHandedOver,
+      paperProofUrl: proofUrl.trim(),
       notes: 'Hai bên đã ký biên bản bàn giao giấy đầy đủ.',
       status: 'DA_KY'
     };
-    setHandoverProtocols(prev => [...prev.filter(p => p.roomId !== roomId), newProtocol]);
+    setHandoverProtocols(prev => [...prev.filter(p => p.contractId !== contractId), newProtocol]);
     addAuditLog('KY_BIEN_BAN_NHAN_PHONG', 'ASSET', roomId, 'Ghi nhận chữ ký biên bản nhận phòng giấy');
     showToast('Đã ghi nhận ký biên bản nhận phòng giấy.');
+    return { success: true };
   };
 
   const createIncident = (data: Omit<AssetIncident, 'id' | 'code'>) => {
+    const room = rooms.find(item => item.id === data.roomId);
+    const rentalExists = room?.currentRentalId === data.rentalId || contracts.some(contract =>
+      contract.roomId === data.roomId && contract.rentalId === data.rentalId && contract.status === 'DA_KY'
+    );
+    if (!rentalExists || !data.assetName.trim() || !data.description.trim() || !data.actionStep.trim()) {
+      showToast('Cần phòng, lượt thuê và thông tin sự cố hợp lệ.');
+      return { success: false, incidentId: '' };
+    }
     const count = incidents.length + 1;
-    const code = `SC-2026-${count.toString().padStart(3, '0')}`;
+    const code = `SC-${new Date().getFullYear()}-${count.toString().padStart(3, '0')}`;
     const newIncident: AssetIncident = {
       ...data,
       id: code,
@@ -1017,10 +1294,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Checkout methods
   const createCheckoutPlan = (roomId: string, plannedDate: string, channel: 'ZALO' | 'DIEN_THOAI' | 'TRUC_TIEP', notes: string) => {
+    const room = rooms.find(item => item.id === roomId);
+    if (!room?.currentRentalId) {
+      showToast('Chỉ tạo kế hoạch trả cho phòng đang có lượt thuê.');
+      return;
+    }
+    if (!parseLocalDate(plannedDate)) {
+      showToast('Ngày trả phòng dự kiến không hợp lệ.');
+      return;
+    }
+    if (checkoutPlans.some(plan => plan.rentalId === room.currentRentalId && plan.status === 'DANG_CHO')) {
+      showToast('Lượt thuê này đã có kế hoạch trả đang chờ.');
+      return;
+    }
     const newPlan: CheckoutPlan = {
-      id: `PL-${roomId}`,
+      id: `PL-${room.currentRentalId}`,
       roomId,
-      rentalId: `LT-${roomId}-01`,
+      rentalId: room.currentRentalId,
       plannedDate,
       confirmedChannel: channel,
       notes,
@@ -1035,7 +1325,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
       ]
     };
-    setCheckoutPlans(prev => [...prev.filter(p => p.roomId !== roomId), newPlan]);
+    setCheckoutPlans(prev => [...prev.filter(p => p.rentalId !== newPlan.rentalId), newPlan]);
     // Cập nhật trạng thái phòng sang SẮP TRẢ nếu đang thuê
     setRooms(prev => prev.map(r => r.id === roomId && r.status === 'DANG_THUE' ? { ...r, status: 'SAP_TRA' } : r));
     addAuditLog('GHI_KE_HOACH_TRA_PHONG', 'CHECKOUT', roomId, `Ghi ngày dự kiến trả phòng: ${plannedDate} qua ${channel}`);
@@ -1043,7 +1333,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const editCheckoutPlan = (roomId: string, newDate: string, channel: string, reason: string) => {
-    setCheckoutPlans(prev => prev.map(p => p.roomId === roomId ? {
+    const room = rooms.find(item => item.id === roomId);
+    if (!room?.currentRentalId || !parseLocalDate(newDate) || !reason.trim()) {
+      showToast('Cần lượt thuê đang hoạt động, ngày hợp lệ và lý do đổi lịch.');
+      return;
+    }
+    const planExists = checkoutPlans.some(p => p.roomId === roomId && p.rentalId === room.currentRentalId && p.status === 'DANG_CHO');
+    if (!planExists) {
+      showToast('Không tìm thấy kế hoạch trả đang chờ cho lượt thuê này.');
+      return;
+    }
+    setCheckoutPlans(prev => prev.map(p => p.roomId === roomId && p.rentalId === room.currentRentalId && p.status === 'DANG_CHO' ? {
       ...p,
       plannedDate: newDate,
       history: [
@@ -1062,7 +1362,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const addCheckoutPlanFeedback = (roomId: string, channel: string, content: string, newDate?: string) => {
-    setCheckoutPlans(prev => prev.map(p => p.roomId === roomId ? {
+    const room = rooms.find(item => item.id === roomId);
+    if (!room?.currentRentalId || !content.trim() || (newDate && !parseLocalDate(newDate))) {
+      showToast('Cần lượt thuê đang hoạt động và nội dung phản hồi hợp lệ.');
+      return;
+    }
+    setCheckoutPlans(prev => prev.map(p => p.roomId === roomId && p.rentalId === room.currentRentalId && p.status === 'DANG_CHO' ? {
       ...p,
       plannedDate: newDate || p.plannedDate,
       history: [
@@ -1081,11 +1386,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const createCheckoutDraft = (roomId: string) => {
-    const protocolId = `CK-${roomId}`;
+    const room = rooms.find(item => item.id === roomId);
+    if (!room?.currentRentalId) {
+      showToast('Không có lượt thuê đang hoạt động để lập biên bản trả phòng.');
+      return { success: false, protocolId: '' };
+    }
+    const existingProtocol = checkoutProtocols.find(protocol => protocol.rentalId === room.currentRentalId);
+    if (existingProtocol && existingProtocol.status !== 'HOAN_TAT') {
+      return { success: true, protocolId: existingProtocol.id };
+    }
+    const protocolId = `CK-${room.currentRentalId}`;
     const newProtocol: CheckoutProtocol = {
       id: protocolId,
       roomId,
-      rentalId: `LT-${roomId}-01`,
+      rentalId: room.currentRentalId,
       draftDate: new Date().toLocaleDateString('vi-VN'),
       actualReturnConfirmed: false,
       isPendingResolution: false,
@@ -1093,14 +1407,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       status: 'NHAP',
       verifiedCheckoutConditions: false
     };
-    setCheckoutProtocols(prev => [...prev.filter(p => p.roomId !== roomId), newProtocol]);
+    setCheckoutProtocols(prev => [...prev.filter(p => p.rentalId !== newProtocol.rentalId), newProtocol]);
     addAuditLog('TAO_BIEN_BAN_TRA_NHAP', 'CHECKOUT', roomId, 'Khởi tạo biên bản trả phòng nháp');
     showToast('Đã lập dự thảo biên bản trả phòng.');
     return { success: true, protocolId };
   };
 
   const confirmActualReturn305 = (roomId: string, finalElectric: number, finalWater: number) => {
-    setCheckoutProtocols(prev => prev.map(p => p.roomId === roomId ? {
+    const room = rooms.find(item => item.id === roomId);
+    const protocol = checkoutProtocols.find(p => p.roomId === roomId && p.rentalId === room?.currentRentalId);
+    if (!room?.currentRentalId || !protocol) return { success: false, error: 'Chưa lập biên bản trả cho lượt thuê hiện tại.' };
+    if (!Number.isFinite(finalElectric) || !Number.isFinite(finalWater) || finalElectric < 0 || finalWater < 0) {
+      return { success: false, error: 'Chỉ số điện nước phải là số không âm.' };
+    }
+    const lastMeterReading = meterReadings
+      .filter(reading => reading.roomId === roomId && reading.rentalId === room.currentRentalId)
+      .sort((a, b) => a.periodId.localeCompare(b.periodId))
+      .at(-1);
+    if (lastMeterReading && (finalElectric < lastMeterReading.electricNew || finalWater < lastMeterReading.waterNew)) {
+      return { success: false, error: 'Chỉ số chốt lúc trả không được nhỏ hơn chỉ số kỳ gần nhất.' };
+    }
+    setCheckoutProtocols(prev => prev.map(p => p.id === protocol.id ? {
       ...p,
       actualReturnDate: new Date().toLocaleDateString('vi-VN'),
       actualReturnConfirmed: true, // Đạt mốc 3.05
@@ -1115,7 +1442,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const markReturnPending = (roomId: string, reason: string) => {
-    setCheckoutProtocols(prev => prev.map(p => p.roomId === roomId ? {
+    const room = rooms.find(item => item.id === roomId);
+    const protocol = checkoutProtocols.find(p => p.roomId === roomId && p.rentalId === room?.currentRentalId);
+    if (!room?.currentRentalId || !protocol) return { success: false, error: 'Chưa lập biên bản trả cho lượt thuê hiện tại.' };
+    if (!reason.trim()) return { success: false, error: 'Cần ghi rõ phần bàn giao còn vướng.' };
+    setCheckoutProtocols(prev => prev.map(p => p.id === protocol.id ? {
       ...p,
       isPendingResolution: true,
       pendingReason: reason,
@@ -1125,9 +1456,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setRooms(prev => prev.map(r => r.id === roomId ? { ...r, status: 'CHUA_BAN_GIAO_XONG' } : r));
     addAuditLog('CHUA_BAN_GIAO_XONG', 'CHECKOUT', roomId, `Ghi nhận chưa bàn giao xong: ${reason}`);
     showToast('Đã ghi nhận Chưa bàn giao xong. Phòng giữ nguyên trạng thái chưa thể giải phóng.');
+    return { success: true };
   };
 
   const saveAssetComparison = (roomId: string, itemsDiff: { id: string; difference: string; compAmount: number; isDamaged: boolean }[]) => {
+    const room = rooms.find(item => item.id === roomId);
+    const protocol = checkoutProtocols.find(item => item.roomId === roomId && item.rentalId === room?.currentRentalId);
+    if (!protocol?.actualReturnConfirmed || protocol.isPendingResolution) {
+      showToast('Chỉ đối chiếu tài sản sau khi đã nhận lại phòng thực tế và không còn vướng mắc.');
+      return;
+    }
+    if (itemsDiff.some(item => !Number.isFinite(item.compAmount) || item.compAmount < 0 ||
+      (item.isDamaged && !item.difference.trim()))) {
+      showToast('Mỗi khoản hư hại cần có mô tả và mức khấu trừ hợp lệ.');
+      return;
+    }
     setAssetItems(prev => prev.map(item => {
       const match = itemsDiff.find(d => d.id === item.id);
       if (match) {
@@ -1145,10 +1488,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const signCheckoutFinalProtocol = (roomId: string, proofUrl: string) => {
-    setCheckoutProtocols(prev => prev.map(p => p.roomId === roomId ? {
+    const room = rooms.find(item => item.id === roomId);
+    const protocol = checkoutProtocols.find(p => p.roomId === roomId && p.rentalId === room?.currentRentalId);
+    const settlement = depositSettlements.find(item => item.rentalId === room?.currentRentalId);
+    if (!protocol?.actualReturnConfirmed || protocol.isPendingResolution) {
+      return { success: false, error: 'Cần xác nhận đã nhận lại phòng và xử lý xong vướng mắc trước.' };
+    }
+    if (!settlement || !['DA_CHOT_HOAN_TIEN', 'DA_CHOT_THU_THEM'].includes(settlement.status)) {
+      return { success: false, error: 'Cần chốt quyết toán cọc trước khi ký biên bản cuối.' };
+    }
+    if (!proofUrl.trim()) return { success: false, error: 'Cần nhập mã chứng từ hoặc căn cứ biên bản đã ký.' };
+    setCheckoutProtocols(prev => prev.map(p => p.id === protocol.id ? {
       ...p,
       paperProtocolSigned: true,
-      paperProofUrl: proofUrl || 'https://images.unsplash.com/photo-1450133064473-71024230f91b?auto=format&fit=crop&w=400&q=80',
+      paperProofUrl: proofUrl.trim(),
       status: 'CHO_QUYET_TOAN'
     } : p));
     addAuditLog('HOAN_TAT_BIEN_BAN_TRA', 'CHECKOUT', roomId, 'Ghi nhận hai bên đã ký biên bản trả phòng giấy');
@@ -1157,8 +1510,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const verifyReturnAndFreeRoom = (roomId: string) => {
-    const protocol = checkoutProtocols.find(p => p.roomId === roomId);
-    const settlement = depositSettlements.find(s => s.roomId === roomId);
+    const room = rooms.find(item => item.id === roomId);
+    const protocol = checkoutProtocols.find(p => p.roomId === roomId && p.rentalId === room?.currentRentalId);
+    const settlement = depositSettlements.find(s => s.roomId === roomId && s.rentalId === room?.currentRentalId);
 
     const unmetReasons: string[] = [];
     if (!protocol?.actualReturnConfirmed) unmetReasons.push('Chưa xác nhận nhận lại phòng thực tế (3.05)');
@@ -1183,7 +1537,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       updatedAt: new Date().toISOString().split('T')[0]
     } : r));
 
-    setCheckoutProtocols(prev => prev.map(p => p.roomId === roomId ? { ...p, status: 'HOAN_TAT', verifiedCheckoutConditions: true } : p));
+    setCheckoutProtocols(prev => prev.map(p => p.rentalId === room?.currentRentalId
+      ? { ...p, status: 'HOAN_TAT', verifiedCheckoutConditions: true }
+      : p
+    ));
+    const currentContract = contracts.find(contract =>
+      contract.id === room?.currentContractId && contract.rentalId === room?.currentRentalId
+    );
+    if (currentContract) {
+      setContracts(prev => prev.map(contract => contract.id === currentContract.id ? { ...contract, status: 'KET_THUC' } : contract));
+    }
+    setCheckoutPlans(prev => prev.map(plan =>
+      plan.rentalId === room?.currentRentalId && plan.status === 'DANG_CHO'
+        ? { ...plan, status: 'DA_THUC_HIEN' }
+        : plan
+    ));
 
     addAuditLog('GIAI_PHONG_PHONG_TRONG', 'ROOM', roomId, 'Kiểm tra đủ mọi điều kiện: giải phóng phòng thành TRỐNG');
     showToast(`Đã giải phóng phòng ${roomId} thành TRỐNG thành công! Sẵn sàng cho lượt thuê mới.`);
@@ -1191,16 +1559,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // Billing methods
-  const recordMeterReading = (periodId: string, roomId: string, elNew: number, waNew: number, elProof?: string, waProof?: string) => {
+  const recordMeterReading = (
+    periodId: string,
+    roomId: string,
+    elNew: number,
+    waNew: number,
+    elProof?: string,
+    waProof?: string,
+    elOldInput?: number,
+    waOldInput?: number
+  ) => {
     const existing = meterReadings.find(m => m.periodId === periodId && m.roomId === roomId);
     const room = rooms.find(r => r.id === roomId);
     if (!room) return { success: false, error: 'Phòng không tồn tại.' };
+    if (!room.currentRentalId || !room.currentTenantId) {
+      return { success: false, error: 'Phòng chưa có lượt thuê đang hoạt động nên không thể ghi chỉ số.' };
+    }
 
     const previousReading = meterReadings
       .filter(m => m.roomId === roomId && m.id !== existing?.id)
+      .sort((a, b) => a.periodId.localeCompare(b.periodId))
       .at(-1);
-    const elOld = existing?.electricOld ?? previousReading?.electricNew ?? 1000;
-    const waOld = existing?.waterOld ?? previousReading?.waterNew ?? 30;
+    const elOld = existing?.electricOld ?? previousReading?.electricNew ?? elOldInput;
+    const waOld = existing?.waterOld ?? previousReading?.waterNew ?? waOldInput;
+    if (elOld === undefined || waOld === undefined || !Number.isFinite(elOld) || !Number.isFinite(waOld) || elOld < 0 || waOld < 0) {
+      return { success: false, error: 'Chưa có chỉ số kỳ trước. Hãy nhập chỉ số đầu kỳ thực tế trước khi lưu.' };
+    }
 
     if (elNew < elOld) {
       return { success: false, error: `Số điện mới (${elNew}) không được nhỏ hơn số cũ (${elOld}). Vui lòng kiểm tra lại công tơ.` };
@@ -1213,7 +1597,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       id: existing ? existing.id : `MR-${periodId}-${roomId}`,
       periodId,
       roomId,
-      rentalId: room.currentRentalId || `LT-${roomId}-01`,
+      rentalId: room.currentRentalId,
       recordedDate: new Date().toLocaleDateString('vi-VN'),
       electricOld: elOld,
       electricNew: elNew,
@@ -1261,10 +1645,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const calculatePeriodForRoom = (periodId: string, roomId: string) => {
     const room = rooms.find(r => r.id === roomId);
     const reading = meterReadings.find(m => m.periodId === periodId && m.roomId === roomId);
-    const activeTariff = tariffs.find(t => t.isActive) || tariffs[0];
     const period = periods.find(p => p.id === periodId);
+    const contract = contracts.find(c =>
+      c.id === room?.currentContractId && c.rentalId === room.currentRentalId && c.tenantId === room.currentTenantId
+    );
 
-    if (!room || !reading || !period) {
+    if (!room || !reading || !period || !contract) {
+      showToast('Thiếu phòng, hợp đồng hoặc chỉ số hợp lệ nên chưa thể tính tiền.');
+      return { success: false };
+    }
+    if (reading.rentalId !== contract.rentalId) {
+      showToast('Chỉ số điện nước không thuộc lượt thuê hiện tại của phòng.');
+      return { success: false };
+    }
+
+    const serviceMonthMatch = period.serviceForPeriodMonthYear.match(/^(\d{1,2})\/(\d{4})$/);
+    if (!serviceMonthMatch) {
+      showToast('Kỳ tính tiền có tháng dịch vụ không hợp lệ.');
+      return { success: false };
+    }
+    const serviceMonthDate = new Date(Number(serviceMonthMatch[2]), Number(serviceMonthMatch[1]) - 1, 1);
+    const activeTariff = tariffs
+      .map(tariff => ({ tariff, effectiveDate: parseLocalDate(tariff.effectiveFrom) }))
+      .filter(entry => entry.effectiveDate && entry.effectiveDate <= serviceMonthDate)
+      .sort((a, b) => b.effectiveDate!.getTime() - a.effectiveDate!.getTime())[0]?.tariff;
+    if (!activeTariff) {
+      showToast(`Chưa có đơn giá áp dụng cho kỳ ${period.serviceForPeriodMonthYear}.`);
       return { success: false };
     }
 
@@ -1278,7 +1684,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const totalServiceAmount = electricAmount + waterAmount + fixedServiceAmount + wifiAmount + garbageAmount;
 
     // Tiền thuê tháng tới trả trước
-    const nextMonthRent = room.basePrice;
+    const rentMonthMatch = period.rentForPeriodMonthYear.match(/^(\d{1,2})\/(\d{4})$/);
+    if (!rentMonthMatch) {
+      showToast('Kỳ tính tiền có tháng thuê không hợp lệ.');
+      return { success: false };
+    }
+    const contractStartDate = parseLocalDate(contract.startDate);
+    const isFirstRentAlreadyPaid = contract.type === 'LAN_DAU' &&
+      initialPayments.some(payment => payment.contractId === contract.id) &&
+      contractStartDate?.getFullYear() === Number(rentMonthMatch[2]) &&
+      contractStartDate.getMonth() + 1 === Number(rentMonthMatch[1]);
+    const nextMonthRent = isFirstRentAlreadyPaid ? 0 : contract.monthlyRent;
     const totalDue = nextMonthRent + totalServiceAmount;
 
     const calcId = `CALC-${periodId}-${roomId}`;
@@ -1286,10 +1702,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       id: calcId,
       periodId,
       roomId,
-      rentalId: room.currentRentalId || `LT-${roomId}-01`,
-      tenantId: room.currentTenantId || 'KT001',
+      rentalId: contract.rentalId,
+      tenantId: contract.tenantId,
       nextMonthRent,
-      rentPeriodLabel: `Tiền thuê tháng ${period.rentForPeriodMonthYear} (trả trước)`,
+      rentPeriodLabel: isFirstRentAlreadyPaid
+        ? `Tiền thuê tháng ${period.rentForPeriodMonthYear} đã thu lúc nhận phòng`
+        : `Tiền thuê tháng ${period.rentForPeriodMonthYear} (trả trước)`,
       electricUsage,
       electricRate: activeTariff.electricityPricePerKwh,
       electricAmount,
@@ -1306,30 +1724,109 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       totalDueCurrentPeriod: totalDue,
       previousUnpaidBalance: 0,
       tariffVersionUsed: activeTariff.id,
-      isReconciled: true,
-      reconciliationNotes: `Áp dụng biểu giá ${activeTariff.versionName}`
+      isReconciled: false
     };
 
     setCalculations(prev => [...prev.filter(c => !(c.periodId === periodId && c.roomId === roomId)), newCalc]);
+    setNotices(prev => prev.map(notice =>
+      notice.calcId === calcId && notice.status === 'DANG_HIEU_LUC'
+        ? { ...notice, status: 'DA_THAY_THE' }
+        : notice
+    ));
+    const periodRooms = rooms.filter(item =>
+      ['DANG_THUE', 'SAP_TRA', 'CHUA_BAN_GIAO_XONG'].includes(item.status) && Boolean(item.currentRentalId)
+    );
+    const otherRoomCalculations = calculations.filter(calc => calc.periodId === periodId && calc.roomId !== roomId);
+    const hasAllCalculations = periodRooms.every(item =>
+      item.id === roomId || otherRoomCalculations.some(calc => calc.roomId === item.id)
+    );
+    setPeriods(prev => prev.map(item => item.id === periodId
+      ? { ...item, status: hasAllCalculations ? 'DA_TINH_TIEN' : 'CHUA_CHOT' }
+      : item
+    ));
     addAuditLog('TINH_TIEN_KY', 'BILLING', roomId, `Tính tiền kỳ ${periodId}: Thuê tới ${nextMonthRent.toLocaleString()} đ, Dịch vụ ${totalServiceAmount.toLocaleString()} đ = Tổng ${totalDue.toLocaleString()} đ`);
     showToast(`Đã tính tiền kỳ ${periodId} phòng ${room.roomNumber}: ${totalDue.toLocaleString()} VNĐ`);
     return { success: true, calcId };
   };
 
   const reconcilePeriodCalculation = (calcId: string, notes: string) => {
-    setCalculations(prev => prev.map(c => c.id === calcId ? { ...c, isReconciled: true, reconciliationNotes: notes } : c));
+    if (!notes.trim()) {
+      showToast('Hãy ghi nội dung đối chiếu trước khi xác nhận.');
+      return;
+    }
+    const updatedCalculations = calculations.map(c => c.id === calcId
+      ? { ...c, isReconciled: true, reconciliationNotes: notes.trim() }
+      : c
+    );
+    if (!calculations.some(c => c.id === calcId)) {
+      showToast('Không tìm thấy bảng tính tiền cần đối chiếu.');
+      return;
+    }
+    const calculation = calculations.find(c => c.id === calcId)!;
+    setCalculations(updatedCalculations);
+    const periodRooms = rooms.filter(item =>
+      ['DANG_THUE', 'SAP_TRA', 'CHUA_BAN_GIAO_XONG'].includes(item.status) && Boolean(item.currentRentalId)
+    );
+    const periodIsFullyReconciled = periodRooms.length > 0 && periodRooms.every(room => {
+      const roomCalculation = updatedCalculations.find(item => item.periodId === calculation.periodId && item.roomId === room.id);
+      return roomCalculation?.isReconciled;
+    });
+    setPeriods(prev => prev.map(period => period.id === calculation.periodId
+      ? { ...period, status: periodIsFullyReconciled ? 'DA_DOI_CHIEU' : 'DA_TINH_TIEN' }
+      : period
+    ));
     addAuditLog('DOI_CHIEU_KHOAN_PHAI_THU', 'BILLING', calcId, `Đối chiếu số liệu: ${notes}`);
     showToast('Đã đối chiếu khoản phải thu hợp lệ.');
   };
 
-  const issuePaymentNoticeQR = (calcId: string, dueDate: string) => {
+  const issuePaymentNoticeQR = async (calcId: string, dueDate: string) => {
     const calc = calculations.find(c => c.id === calcId);
-    const activeBank = bankConfigs.find(b => b.isActive) || bankConfigs[0];
-    if (!calc) return { success: false, noticeId: '' };
+    const activeBank = bankConfigs.find(b => b.isActive);
+    if (!calc || !calc.isReconciled) {
+      showToast('Cần đối chiếu xong bảng tính tiền trước khi phát hành thông báo.');
+      return { success: false, noticeId: '' };
+    }
+    if (!activeBank) {
+      showToast('Chưa thiết lập tài khoản ngân hàng nhận tiền.');
+      return { success: false, noticeId: '' };
+    }
+    if (!/^\d{6}$/.test(activeBank.bankCode) || !/^\d+$/.test(activeBank.accountNumber)) {
+      showToast('Mã ngân hàng VietQR cần đúng 6 chữ số và số tài khoản chỉ gồm chữ số.');
+      return { success: false, noticeId: '' };
+    }
+    const dueDateValue = parseLocalDate(dueDate);
+    if (!dueDateValue || dueDateValue < new Date(new Date().setHours(0, 0, 0, 0))) {
+      showToast('Ngày đến hạn không hợp lệ.');
+      return { success: false, noticeId: '' };
+    }
+    if (!Number.isFinite(calc.totalDueCurrentPeriod) || calc.totalDueCurrentPeriod <= 0) {
+      showToast('Tổng tiền thông báo phải lớn hơn 0.');
+      return { success: false, noticeId: '' };
+    }
+    const currentNotice = notices.find(notice =>
+      notice.periodId === calc.periodId && notice.roomId === calc.roomId && notice.status === 'DANG_HIEU_LUC'
+    );
+    const currentTransaction = currentNotice && transactions.find(tx => tx.noticeId === currentNotice.id);
+    if (currentTransaction?.status === 'DA_THU') {
+      showToast('Khoản này đã thu đủ, không thể phát hành lại thông báo.');
+      return { success: false, noticeId: '' };
+    }
+    if (currentNotice && overdueDebts.some(debt => debt.noticeId === currentNotice.id)) {
+      showToast('Thông báo cũ đã chuyển thành công nợ. Hãy xử lý khoản nợ trước khi phát hành QR mới.');
+      return { success: false, noticeId: '' };
+    }
 
-    const noticeCode = `TB-${calc.periodId}-${calc.roomId}`;
+    const noticeCode = `TB-${calc.periodId}-${calc.roomId}-${Date.now()}`;
     const transferContent = `${calc.roomId} THANG ${calc.periodId.slice(-2)}`;
-    const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=2|99|${activeBank.accountNumber}|${encodeURIComponent(activeBank.accountHolder)}||0|0|${calc.totalDueCurrentPeriod}|${encodeURIComponent(transferContent)}|transfer_myqr`;
+    let qrImageUrl: string;
+    try {
+      const payload = createVietQrPayload(activeBank.bankCode, activeBank.accountNumber, calc.totalDueCurrentPeriod, transferContent);
+      qrImageUrl = await QRCode.toDataURL(payload, { width: 320, margin: 2, errorCorrectionLevel: 'M' });
+    } catch (error) {
+      console.error('Không thể tạo mã QR thanh toán trên thiết bị.', error);
+      showToast('Không tạo được mã QR. Kiểm tra thông tin tài khoản rồi thử lại.');
+      return { success: false, noticeId: '' };
+    }
 
     const newNotice: PaymentNotice = {
       id: noticeCode,
@@ -1349,15 +1846,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         accountHolder: activeBank.accountHolder,
         transferContent
       },
-      qrImageUrl: qrUrl,
+      qrImageUrl,
       status: 'DANG_HIEU_LUC',
       shareLog: []
     };
 
-    setNotices(prev => [...prev.filter(n => n.id !== noticeCode), newNotice]);
+    setNotices(prev => [...prev.map(notice =>
+      notice.periodId === calc.periodId && notice.roomId === calc.roomId && notice.status === 'DANG_HIEU_LUC'
+        ? { ...notice, status: 'DA_THAY_THE' as const }
+        : notice
+    ), newNotice]);
 
     // Tạo giao dịch theo dõi ở trạng thái CHƯA THU
-    const txId = `TX-${calc.periodId}-${calc.roomId}`;
+    const txId = `TX-${noticeCode}`;
     const newTx: PaymentTransaction = {
       id: txId,
       noticeId: noticeCode,
@@ -1378,6 +1879,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const confirmPaymentReceived = (noticeId: string, amount: number, refCode: string, proofUrl?: string) => {
     const notice = notices.find(n => n.id === noticeId);
     if (!notice) return { success: false, error: 'Thông báo không tồn tại.' };
+    if (notice.status !== 'DANG_HIEU_LUC') return { success: false, error: 'Mã QR này đã bị thay thế và không còn hiệu lực.' };
+    const transaction = transactions.find(tx => tx.noticeId === noticeId);
+    if (!transaction) return { success: false, error: 'Không tìm thấy giao dịch theo dõi của thông báo.' };
+    if (transaction.status === 'DA_THU') return { success: false, error: 'Thông báo này đã được xác nhận thu.' };
+    if (!Number.isFinite(amount) || !refCode.trim() || !proofUrl?.trim()) {
+      return { success: false, error: 'Cần nhập số tiền, mã giao dịch và chứng từ ngân hàng.' };
+    }
+    if (transactions.some(tx => tx.noticeId !== noticeId && tx.bankTransactionRef === refCode.trim())) {
+      return { success: false, error: 'Mã giao dịch ngân hàng này đã được ghi nhận.' };
+    }
 
     // Quy tắc nghiệp vụ bắt buộc: Đúng 1 giao dịch chuyển khoản ĐỦ 100% tổng tiền QR, KHÔNG CHO TRẢ MỘT PHẦN
     if (amount !== notice.totalAmount) {
@@ -1392,8 +1903,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       status: 'DA_THU',
       receivedAmount: amount,
       receivedDate: new Date().toLocaleDateString('vi-VN'),
-      bankTransactionRef: refCode || `FT-${Date.now().toString().slice(-6)}`,
-      paymentProofUrl: proofUrl || 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?auto=format&fit=crop&w=400&q=80',
+      bankTransactionRef: refCode.trim(),
+      paymentProofUrl: proofUrl.trim(),
       confirmedBy: currentUser?.fullName || 'Chủ nhà',
       confirmedAt: new Date().toLocaleString('vi-VN')
     } : t));
@@ -1411,10 +1922,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const tx = transactions.find(t => t.id === transactionId);
     if (!tx) return { success: false, error: 'Giao dịch không tồn tại.' };
+    if (tx.status !== 'DA_THU') return { success: false, error: 'Chỉ sửa được giao dịch đã xác nhận thu.' };
+    if (!Number.isFinite(newAmount) || newAmount < 0 || newAmount > tx.totalDue) {
+      return { success: false, error: 'Số tiền điều chỉnh phải từ 0 đến tổng tiền của giao dịch.' };
+    }
+    const notice = notices.find(item => item.id === tx.noticeId);
+    const dueDate = notice ? parseLocalDate(notice.dueDate) : null;
+    const isOverdue = Boolean(dueDate && dueDate < new Date(new Date().setHours(0, 0, 0, 0)) && newAmount < tx.totalDue);
+    const nextStatus: PaymentTransaction['status'] = newAmount === tx.totalDue
+      ? 'DA_THU'
+      : isOverdue ? 'QUA_HAN' : 'CHUA_THU';
 
     setTransactions(prev => prev.map(t => t.id === transactionId ? {
       ...t,
+      status: nextStatus,
       receivedAmount: newAmount,
+      receivedDate: newAmount === tx.totalDue ? t.receivedDate : undefined,
+      bankTransactionRef: newAmount === tx.totalDue ? t.bankTransactionRef : undefined,
+      paymentProofUrl: newAmount === tx.totalDue ? (proofUrl?.trim() || t.paymentProofUrl) : undefined,
+      confirmedBy: newAmount === tx.totalDue ? t.confirmedBy : undefined,
+      confirmedAt: newAmount === tx.totalDue ? t.confirmedAt : undefined,
       correctionHistory: [
         ...(t.correctionHistory || []),
         {
@@ -1427,6 +1954,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
       ]
     } : t));
+    if (tx.status === 'DA_THU' && nextStatus !== 'DA_THU' && notice) {
+      setOverdueDebts(prev => {
+        const outstanding = Math.max(0, tx.totalDue - newAmount);
+        if (!isOverdue) return prev.filter(debt => debt.noticeId !== notice.id);
+        const existingDebt = prev.find(debt => debt.noticeId === notice.id);
+        if (existingDebt) return prev.map(debt => debt.noticeId === notice.id ? { ...debt, unpaidAmount: outstanding } : debt);
+        const daysOverdue = dueDate
+          ? Math.floor((Date.now() - dueDate.getTime()) / 86400000)
+          : 0;
+        return [...prev, {
+          id: `DEBT-${notice.id}`,
+          noticeId: notice.id,
+          roomId: tx.roomId,
+          tenantId: tx.tenantId,
+          periodId: tx.periodId,
+          originalDueDate: notice.dueDate,
+          unpaidAmount: outstanding,
+          daysOverdue,
+          reminderHistory: [],
+          tenantReplies: []
+        }];
+      });
+    } else if (nextStatus === 'DA_THU') {
+      setOverdueDebts(prev => prev.filter(debt => debt.noticeId !== tx.noticeId));
+    }
 
     addAuditLog('SUA_XAC_NHAN_THU', 'PAYMENT', transactionId, `Sửa xác nhận thu từ ${tx.receivedAmount?.toLocaleString()}đ sang ${newAmount.toLocaleString()}đ: ${reason}`);
     showToast('Đã sửa xác nhận thu tiền và lưu lịch sử kiểm toán.');
@@ -1473,12 +2025,34 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Deposit methods
   const createDepositSettlement = (data: Omit<DepositSettlement, 'id'>) => {
-    const id = `QTC-${data.roomId}`;
+    const room = rooms.find(item => item.id === data.roomId);
+    const contract = contracts.find(item => item.id === data.contractId && item.rentalId === data.rentalId);
+    if (!room || !contract || room.currentRentalId !== data.rentalId) {
+      showToast('Phòng và hợp đồng không khớp với lượt thuê đang quyết toán.');
+      return { success: false, settlementId: '' };
+    }
+    if (depositSettlements.some(item => item.rentalId === data.rentalId)) {
+      showToast('Lượt thuê này đã có quyết toán tiền cọc.');
+      return { success: false, settlementId: '' };
+    }
+    const deductions = data.remainingRentalObligation + data.finalServiceObligation +
+      data.assetDamageDeduction + data.otherDeductions;
+    if ([data.originalDeposit, data.remainingRentalObligation, data.finalServiceObligation, data.assetDamageDeduction, data.otherDeductions]
+      .some(value => !Number.isFinite(value) || value < 0)) {
+      showToast('Các khoản quyết toán phải là số không âm.');
+      return { success: false, settlementId: '' };
+    }
+    if (data.assetDamageDeduction > 0 && !data.assetDamageNotes.trim()) {
+      showToast('Cần ghi căn cứ khấu trừ khi có hư hại tài sản.');
+      return { success: false, settlementId: '' };
+    }
+    const id = `QTC-${data.rentalId}`;
     const newSettlement: DepositSettlement = {
       ...data,
-      id
+      id,
+      netRefundAmount: data.originalDeposit - deductions
     };
-    setDepositSettlements(prev => [...prev.filter(s => s.roomId !== data.roomId), newSettlement]);
+    setDepositSettlements(prev => [...prev.filter(s => s.rentalId !== data.rentalId), newSettlement]);
     addAuditLog('LAP_QUYET_TOAN_COC', 'DEPOSIT', id, `Lập quyết toán cọc phòng ${data.roomId}, hoàn trả dự kiến ${data.netRefundAmount.toLocaleString()} đ`);
     showToast(`Đã lập dự thảo quyết toán cọc cho phòng ${data.roomId}.`);
     return { success: true, settlementId: id };
@@ -1493,7 +2067,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         {
           date: new Date().toLocaleString('vi-VN'),
           reason,
-          adjustedAmount: data.netRefundAmount || s.netRefundAmount,
+          adjustedAmount: data.netRefundAmount ?? s.netRefundAmount,
           by: currentUser?.fullName || 'Chủ nhà'
         }
       ]
@@ -1503,44 +2077,90 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const finalizeDepositSettlement = (settlementId: string, proofUrl: string, method: DepositSettlement['paymentMethod']) => {
+    const settlement = depositSettlements.find(item => item.id === settlementId);
+    if (!settlement) return { success: false };
+    if (settlement.status !== 'NHAP' && settlement.status !== 'CHUA_THONG_NHAT') return { success: false };
+    if (!proofUrl.trim()) {
+      showToast('Cần nhập mã chứng từ hoặc căn cứ xác nhận đã thực hiện.');
+      return { success: false };
+    }
+    const expectedMethod = settlement.netRefundAmount > 0
+      ? 'CHUYEN_KHOAN_HOAN_COC'
+      : settlement.netRefundAmount < 0 ? 'THU_THEM_TIEN' : 'DOI_TRU';
+    if (method !== expectedMethod) {
+      showToast(settlement.netRefundAmount > 0
+        ? 'Số dư cọc cần hoàn lại cho khách.'
+        : settlement.netRefundAmount < 0
+          ? 'Các khoản khấu trừ vượt tiền cọc; cần ghi nhận thu thêm.'
+          : 'Tiền cọc và các khoản phải trả đã cân bằng; chọn đối trừ.');
+      return { success: false };
+    }
     setDepositSettlements(prev => prev.map(s => s.id === settlementId ? {
       ...s,
-      status: 'DA_CHOT_HOAN_TIEN',
-      actualSettlementProofUrl: proofUrl || 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?auto=format&fit=crop&w=400&q=80',
+      status: settlement.netRefundAmount < 0 ? 'DA_CHOT_THU_THEM' : 'DA_CHOT_HOAN_TIEN',
+      actualSettlementProofUrl: proofUrl.trim(),
       actualSettledDate: new Date().toLocaleDateString('vi-VN'),
       paymentMethod: method
     } : s));
-    addAuditLog('CHOT_QUYET_TOAN_COC', 'DEPOSIT', settlementId, `Ghi nhận kết quả chuyển khoản hoàn cọc thực tế, phương thức ${method}`);
+    addAuditLog('CHOT_QUYET_TOAN_COC', 'DEPOSIT', settlementId, `Ghi nhận quyết toán thực tế, số dư ${settlement.netRefundAmount.toLocaleString()} đ, phương thức ${method}, chứng từ ${proofUrl.trim()}`);
     showToast('Đã chốt kết quả quyết toán cọc thành công!');
     return { success: true };
   };
 
   // Config methods
   const saveTariffConfig = (newTariff: Omit<TariffConfig, 'id' | 'isActive'>) => {
+    const effectiveDate = parseLocalDate(newTariff.effectiveFrom);
+    if (!newTariff.versionName.trim() || !effectiveDate ||
+      [newTariff.electricityPricePerKwh, newTariff.waterPricePerM3, newTariff.fixedServiceFeePerTenancy, newTariff.garbageFeePerRoom, newTariff.wifiFeePerRoom]
+        .some(value => !Number.isFinite(value) || value < 0)) {
+      showToast('Cần nhập tên, ngày hiệu lực và các mức giá hợp lệ.');
+      return { success: false };
+    }
+    if (effectiveDate < new Date(new Date().setHours(0, 0, 0, 0))) {
+      showToast('Không thể ban hành đơn giá mới có hiệu lực trong quá khứ.');
+      return { success: false };
+    }
     // Phiên bản cũ chuyển sang inactive, thêm phiên bản mới
-    const newId = `TF-2026-V${tariffs.length + 1}`;
+    const isEffective = effectiveDate <= new Date(new Date().setHours(0, 0, 0, 0));
+    const newId = `TF-${new Date().getFullYear()}-${Date.now()}`;
     const createdTariff: TariffConfig = {
       ...newTariff,
       id: newId,
-      isActive: true,
+      isActive: isEffective,
       updatedBy: currentUser?.fullName || 'Chủ nhà'
     };
-    setTariffs(prev => [...prev.map(t => ({ ...t, isActive: false })), createdTariff]);
+    setTariffs(prev => [...prev.map(t => ({ ...t, isActive: isEffective ? false : t.isActive })), createdTariff]);
     addAuditLog('CAP_NHAT_DON_GIA', 'CONFIG', newId, `Ban hành đơn giá mới ${createdTariff.versionName}, áp dụng từ ${createdTariff.effectiveFrom}`);
-    showToast(`Đã lưu phiên bản đơn giá mới (${createdTariff.versionName}). Không hồi tố các kỳ cũ.`);
+    showToast(isEffective
+      ? `Đã lưu phiên bản đơn giá mới (${createdTariff.versionName}).`
+      : `Đã lưu đơn giá sẽ áp dụng từ ${createdTariff.effectiveFrom}.`);
+    return { success: true };
   };
 
   const saveBankConfig = (newBank: Omit<BankConfig, 'id' | 'isActive'>) => {
-    const newId = `BK-${Date.now().toString().slice(-4)}`;
+    const effectiveDate = parseLocalDate(newBank.effectiveFrom);
+    if (!newBank.bankName.trim() || !/^\d{6}$/.test(newBank.bankCode) ||
+      !/^\d+$/.test(newBank.accountNumber) || !newBank.accountHolder.trim() ||
+      !newBank.branch.trim() || !effectiveDate) {
+      showToast('Cần nhập ngân hàng, mã VietQR 6 số, số tài khoản, chủ tài khoản, chi nhánh và ngày hiệu lực hợp lệ.');
+      return { success: false };
+    }
+    if (effectiveDate < new Date(new Date().setHours(0, 0, 0, 0))) {
+      showToast('Không thể áp dụng tài khoản ngân hàng có ngày hiệu lực trong quá khứ.');
+      return { success: false };
+    }
+    const isEffective = effectiveDate <= new Date(new Date().setHours(0, 0, 0, 0));
+    const newId = `BK-${Date.now()}`;
     const createdBank: BankConfig = {
       ...newBank,
       id: newId,
-      isActive: true,
+      isActive: isEffective,
       updatedBy: currentUser?.fullName || 'Chủ nhà'
     };
-    setBankConfigs(prev => [...prev.map(b => ({ ...b, isActive: false })), createdBank]);
+    setBankConfigs(prev => [...prev.map(b => ({ ...b, isActive: isEffective ? false : b.isActive })), createdBank]);
     addAuditLog('CAP_NHAT_TAI_KHOAN_NGAN_HANG', 'CONFIG', newId, `Thiết lập tài khoản nhận mới ${newBank.bankName} - ${newBank.accountNumber}`);
-    showToast('Đã cập nhật tài khoản ngân hàng nhận tiền cho các thông báo mới!');
+    showToast(isEffective ? 'Đã cập nhật tài khoản ngân hàng nhận tiền.' : `Đã lưu tài khoản sẽ áp dụng từ ${createdBank.effectiveFrom}.`);
+    return { success: true };
   };
 
   return (
@@ -1548,6 +2168,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       value={{
         isAuthenticated,
         currentUser,
+        isFirstPasswordChangeRequired,
+        failedAttempts: loginGuard.failedAttempts,
+        lockUntil: loginGuard.lockUntil,
+        sessionRemainingMinutes,
         authLoading,
         dataLoading,
         isConfigured: isSupabaseConfigured,
@@ -1555,6 +2179,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         saveStatus,
         saveError,
         login,
+        changeFirstPassword,
         forgotPassword,
         resetPassword,
         changePassword,
@@ -1574,6 +2199,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         tenants,
         coResidents,
         contracts,
+        initialPayments,
         rentalTerms,
         assetItems,
         assetReports,
