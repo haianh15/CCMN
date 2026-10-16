@@ -69,6 +69,16 @@ export const AuthScreens: React.FC = () => {
   const [passwordChangeLockSeconds, setPasswordChangeLockSeconds] = useState(0);
   const [accountPasswordSuccess, setAccountPasswordSuccess] = useState<string | null>(null);
   const accountRequestId = React.useRef<string | null>(null);
+  const firstPasswordRequestId = React.useRef<string | null>(null);
+
+  useEffect(() => {
+    if (authLoading) return;
+    if (currentScreenId === 'LOGIN' && isAuthenticated) {
+      navigate(isFirstPasswordChangeRequired ? 'FIRSTPASS' : 'HOME', {}, true);
+    } else if (currentScreenId === 'FIRSTPASS' && !isFirstPasswordChangeRequired) {
+      navigate(isAuthenticated ? 'HOME' : 'LOGIN', {}, true);
+    }
+  }, [authLoading, currentScreenId, isAuthenticated, isFirstPasswordChangeRequired]);
 
   useEffect(() => {
     if (!lockUntil || lockUntil <= Date.now()) {
@@ -103,6 +113,11 @@ export const AuthScreens: React.FC = () => {
     event.preventDefault();
     setBusy(true);
     setError(null);
+    if (!email.trim() || !password) {
+      setBusy(false);
+      setError('Email và mật khẩu là trường bắt buộc.');
+      return;
+    }
     const result = await login(email, password);
     setBusy(false);
     if (!result.success) setError(result.error || 'Không đăng nhập được. Vui lòng thử lại.');
@@ -145,6 +160,14 @@ export const AuthScreens: React.FC = () => {
         await logout();
         navigate('LOGIN', {}, true);
         showToast('Chưa xác định được kết quả đổi mật khẩu. Vui lòng đăng nhập lại hoặc khôi phục tài khoản.');
+      } else if (result.errorCode === 'SESSION_INVALID' || result.errorCode === 'LOCKED_OUT') {
+        setCurrentPassword('');
+        setNewPassword('');
+        setConfirmPassword('');
+        await logout();
+        navigate('LOGIN', {}, true);
+        if (result.errorCode === 'SESSION_INVALID') showToast('Phiên làm việc đã kết thúc. Vui lòng đăng nhập lại.');
+        else showToast('Tạm thời chưa thể đổi mật khẩu. Vui lòng thử lại sau 15 phút.');
       } else {
         accountRequestId.current = null;
       }
@@ -184,13 +207,67 @@ export const AuthScreens: React.FC = () => {
   const submitFirstPassword = async (event: React.FormEvent) => {
     event.preventDefault();
     setFirstPasswordError(null);
+    if (!currentPassword) {
+      setFirstPasswordError('Mật khẩu hiện tại là trường bắt buộc.');
+      return;
+    }
+    if (!newPassword) {
+      setFirstPasswordError('Mật khẩu mới là trường bắt buộc.');
+      return;
+    }
+    if (!confirmPassword) {
+      setFirstPasswordError('Xác nhận mật khẩu mới là trường bắt buộc.');
+      return;
+    }
+    if (newPassword === currentPassword) {
+      setFirstPasswordError('Mật khẩu mới phải khác mật khẩu hiện tại.');
+      return;
+    }
+    if (newPassword.length < 12) {
+      setFirstPasswordError('Mật khẩu mới cần có ít nhất 12 ký tự.');
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setFirstPasswordError('Xác nhận mật khẩu không khớp.');
+      return;
+    }
+    if (!firstPasswordRequestId.current) firstPasswordRequestId.current = crypto.randomUUID();
     setBusy(true);
-    const result = await changeFirstPassword(newPassword, confirmPassword);
+    const result = await changeFirstPassword(currentPassword, newPassword, confirmPassword, firstPasswordRequestId.current);
     setBusy(false);
-    if (!result.success) setFirstPasswordError(result.error || 'Không đổi được mật khẩu. Vui lòng thử lại.');
+    if (!result.success) {
+      setFirstPasswordError(result.error || 'Không thể đổi mật khẩu lúc này. Vui lòng thử lại sau.');
+      if (result.errorCode === 'PASSWORD_UPDATED_RELOGIN') {
+        firstPasswordRequestId.current = null;
+        setCurrentPassword('');
+        setNewPassword('');
+        setConfirmPassword('');
+        navigate('LOGIN', {}, true);
+        showToast('Mật khẩu đã được cập nhật. Vui lòng đăng nhập lại bằng mật khẩu mới.');
+      } else if (result.errorCode === 'SESSION_INVALID' || result.errorCode === 'SESSION_EXPIRED' || result.errorCode === 'LOCKED_OUT') {
+        firstPasswordRequestId.current = null;
+        setCurrentPassword('');
+        setNewPassword('');
+        setConfirmPassword('');
+        navigate('LOGIN', {}, true);
+        if (result.errorCode === 'SESSION_EXPIRED') showToast('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.');
+        if (result.errorCode === 'SESSION_INVALID') showToast('Phiên làm việc đã kết thúc. Vui lòng đăng nhập lại.');
+        if (result.errorCode === 'LOCKED_OUT') showToast('Đăng nhập tạm khóa 15 phút. Vui lòng thử lại sau.');
+      } else if (result.errorCode === 'UNKNOWN_RESULT' || result.errorCode === 'PASSWORD_UPDATED_RELOGIN') {
+        firstPasswordRequestId.current = null;
+        setCurrentPassword('');
+        setNewPassword('');
+        setConfirmPassword('');
+        navigate('LOGIN', {}, true);
+        showToast(result.error || 'Chưa xác định được kết quả đổi mật khẩu. Vui lòng đăng nhập lại hoặc thực hiện quy trình khôi phục tài khoản.');
+      } else {
+        firstPasswordRequestId.current = null;
+      }
+    }
   };
 
   if (isFirstPasswordChangeRequired || currentScreenId === 'FIRSTPASS') {
+    if (authLoading || !isAuthenticated || !isFirstPasswordChangeRequired || !currentUser) return null;
     return (
       <div className="flex min-h-full w-full items-start justify-center p-4 sm:items-center">
         <AuthCard>
@@ -198,6 +275,17 @@ export const AuthScreens: React.FC = () => {
           <p className="mt-1 text-sm leading-6 text-slate-600">Để bảo vệ tài khoản, hãy đặt mật khẩu mới có ít nhất 12 ký tự.</p>
           <form onSubmit={submitFirstPassword} className="mt-5 space-y-4">
             {firstPasswordError && <ErrorMessage>{firstPasswordError}</ErrorMessage>}
+            {passwordChangeLockSeconds > 0 && (
+              <ErrorMessage>Tạm thời chưa thể đổi mật khẩu. Vui lòng thử lại sau {Math.ceil(passwordChangeLockSeconds / 60)} phút.</ErrorMessage>
+            )}
+            <Field
+              label="Mật khẩu hiện tại"
+              type="password"
+              autoComplete="current-password"
+              value={currentPassword}
+              onChange={event => setCurrentPassword(event.target.value)}
+              placeholder="Nhập mật khẩu hiện tại"
+            />
             <Field
               label="Mật khẩu mới"
               type="password"
@@ -218,12 +306,26 @@ export const AuthScreens: React.FC = () => {
             />
             <button
               type="submit"
-              disabled={busy}
+              disabled={busy || passwordChangeLockSeconds > 0}
               className="min-h-11 w-full rounded-lg bg-blue-600 px-4 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-wait disabled:opacity-60"
             >
-              {busy ? 'Đang cập nhật...' : 'Lưu mật khẩu mới'}
+              {busy ? 'Đang cập nhật...' : 'Đổi mật khẩu'}
             </button>
+            <p className="text-xs leading-5 text-slate-500">Mật khẩu mới phải có ít nhất 12 ký tự và khác mật khẩu hiện tại; xác nhận phải khớp.</p>
           </form>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => {
+              setCurrentPassword('');
+              setNewPassword('');
+              setConfirmPassword('');
+              void logout();
+            }}
+            className="mt-3 min-h-11 w-full rounded-lg border border-slate-300 px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+          >
+            Thoát
+          </button>
         </AuthCard>
       </div>
     );

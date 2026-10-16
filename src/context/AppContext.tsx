@@ -105,7 +105,7 @@ interface AppContextType {
   saveStatus: 'idle' | 'saving' | 'saved' | 'error' | 'conflict';
   saveError: string | null;
   login: (email: string, pass: string) => Promise<{ success: boolean; error?: string }>;
-  changeFirstPassword: (newPass: string, confirmPass: string) => Promise<{ success: boolean; error?: string }>;
+  changeFirstPassword: (currentPass: string, newPass: string, confirmPass: string, requestId: string) => Promise<{ success: boolean; error?: string; errorCode?: string }>;
   forgotPassword: (email: string) => Promise<{ success: boolean; message: string }>;
   resetPassword: (newPass: string) => Promise<{ success: boolean; error?: string }>;
   changePassword: (currentPass: string, newPass: string, confirmPass: string, requestId: string) => Promise<{ success: boolean; error?: string; errorCode?: string }>;
@@ -255,8 +255,6 @@ const mapAuthUser = (user: User) => ({
 const LOGIN_GUARD_KEY = 'greenhouse.login-guard.v1';
 const SESSION_IDLE_LIMIT_MS = 30 * 60 * 1000;
 const LOGIN_LOCK_MS = 15 * 60 * 1000;
-const PASSWORD_CHANGE_ATTEMPT_LIMIT = 5;
-const PASSWORD_CHANGE_LOCK_MS = 15 * 60 * 1000;
 const APP_STATE_LOAD_TIMEOUT_MS = 15_000;
 
 const parseLocalDate = (value: string): Date | null => {
@@ -321,9 +319,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [loginGuard, setLoginGuard] = useState(readLoginGuard);
   const [sessionRemainingMinutes, setSessionRemainingMinutes] = useState(30);
   const [passwordChangeLockUntil, setPasswordChangeLockUntil] = useState<number | null>(null);
-  const passwordChangeFailedAttemptsRef = useRef(0);
   const passwordChangeLockUntilRef = useRef<number | null>(null);
   const passwordChangeRequestsRef = useRef(new Map<string, Promise<{ success: boolean; error?: string; errorCode?: string }>>());
+  const firstPasswordRequestsRef = useRef(new Map<string, Promise<{ success: boolean; error?: string; errorCode?: string }>>());
   const [authLoading, setAuthLoading] = useState(true);
   const [dataLoading, setDataLoading] = useState(false);
   const [databaseError, setDatabaseError] = useState<string | null>(null);
@@ -421,7 +419,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   useEffect(() => {
-    if (!supabase || !isSupabaseConfigured) {
+    const client = supabase;
+    if (!client || !isSupabaseConfigured) {
       setDatabaseError('Chưa cấu hình kết nối Supabase. Hãy thêm URL và khóa public vào biến môi trường.');
       setAuthLoading(false);
       return;
@@ -430,14 +429,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     let active = true;
     const applySession = (session: Session | null) => {
       const user = session?.user ?? null;
+      const needsFirstPasswordChange = user?.app_metadata.must_change_password === true;
+      if (needsFirstPasswordChange) {
+        setDataLoading(false);
+        setDataReadyForUserId(null);
+        applyAppData(createAppData());
+      }
+      if (!user) {
+        setDataLoading(false);
+        setDataReadyForUserId(null);
+        applyAppData(createAppData());
+      }
       setCurrentUser(user ? mapAuthUser(user) : null);
       setIsAuthenticated(Boolean(user));
-      setIsFirstPasswordChangeRequired(user?.user_metadata.must_change_password === true);
-      setDataLoading(Boolean(user));
-      if (!user) setDataReadyForUserId(null);
+      setIsFirstPasswordChangeRequired(needsFirstPasswordChange);
+      if (user && !needsFirstPasswordChange) setDataLoading(true);
     };
 
-    supabase.auth.getSession()
+    client.auth.getSession()
       .then(({ data, error }) => {
         if (!active) return;
         if (error) {
@@ -455,16 +464,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setAuthLoading(false);
       });
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+    const { data: { subscription } } = client.auth.onAuthStateChange((event, session) => {
       if (!active) return;
       applySession(session);
       if (event === 'PASSWORD_RECOVERY') {
         setCurrentScreenId('RESET');
         setHistoryStack([{ screenId: 'RESET' }]);
       } else if (event === 'SIGNED_IN') {
-        const screenId = session?.user.user_metadata.must_change_password === true ? 'FIRSTPASS' : 'HOME';
+        const screenId = session?.user.app_metadata.must_change_password === true ? 'FIRSTPASS' : 'HOME';
         setCurrentScreenId(screenId);
         setHistoryStack([{ screenId }]);
+        if (session) window.setTimeout(() => {
+          client.rpc('record_auth_security_event', {
+            p_event: screenId === 'FIRSTPASS' ? 'FIRST_LOGIN_PENDING' : 'LOGIN_SUCCESS'
+          }).then(({ error }) => {
+            if (error) console.error('Không thể ghi nhật ký đăng nhập thành công.', error);
+          }, error => console.error('Không thể ghi nhật ký đăng nhập thành công.', error));
+        }, 0);
       } else if (event === 'SIGNED_OUT') {
         setCurrentScreenId('LOGIN');
         setHistoryStack([{ screenId: 'LOGIN' }]);
@@ -479,6 +495,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   useEffect(() => {
     const client = supabase;
+    if (!authLoading && isFirstPasswordChangeRequired) {
+      setDataLoading(false);
+      setDataReadyForUserId(null);
+      return;
+    }
     if (!authLoading && !currentUser) {
       setDataLoading(false);
       setDataReadyForUserId(null);
@@ -569,11 +590,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         active = false;
       };
     }
-  }, [authLoading, currentUser?.id, loadAttempt]);
+  }, [authLoading, currentUser?.id, isFirstPasswordChangeRequired, loadAttempt]);
 
   useEffect(() => {
     const client = supabase;
-    if (!currentUser || dataReadyForUserId !== currentUser.id || !client) return;
+    if (!currentUser || isFirstPasswordChangeRequired || dataReadyForUserId !== currentUser.id || !client) return;
     const data: PersistedAppData = {
       rooms,
       tenants,
@@ -639,6 +660,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return () => window.clearTimeout(timer);
   }, [
     currentUser?.id,
+    isFirstPasswordChangeRequired,
     dataReadyForUserId,
     saveAttempt,
     rooms,
@@ -701,6 +723,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setHistoryStack([{ screenId: authScreen }]);
       return;
     }
+    if (isAuthenticated && isFirstPasswordChangeRequired && !['FIRSTPASS', 'LOGIN', 'LOGOUT'].includes(screenId)) {
+      setParams({});
+      setCurrentScreenId('FIRSTPASS');
+      setHistoryStack([{ screenId: 'FIRSTPASS' }]);
+      return;
+    }
+    if (!isAuthenticated && !['LOGIN', 'FORGOT', 'RESET'].includes(screenId)) {
+      setParams({});
+      setCurrentScreenId('LOGIN');
+      setHistoryStack([{ screenId: 'LOGIN' }]);
+      return;
+    }
     // Update bottom tab if main tab
     if (['HOME', 'ROOMS', 'TENANTS', 'PAY', 'MORE'].includes(screenId)) {
       setActiveBottomTab(screenId as any);
@@ -748,8 +782,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  const readPasswordChangeLock = async () => {
+    if (!supabase) return null;
+    const { data, error } = await supabase.rpc('check_password_change_lock');
+    if (error) throw error;
+    const lockUntil = typeof data === 'string' ? Date.parse(data) : null;
+    const activeLock = lockUntil && lockUntil > Date.now() ? lockUntil : null;
+    passwordChangeLockUntilRef.current = activeLock;
+    setPasswordChangeLockUntil(activeLock);
+    return activeLock;
+  };
+
   const login = async (email: string, pass: string) => {
     if (!supabase) return { success: false, error: 'Chưa cấu hình kết nối dữ liệu.' };
+    if (!email.trim() || !pass) {
+      return { success: false, error: 'Tên đăng nhập và mật khẩu là trường bắt buộc.' };
+    }
     if (loginGuard.lockUntil && Date.now() < loginGuard.lockUntil) {
       const remainingMinutes = Math.ceil((loginGuard.lockUntil - Date.now()) / 60000);
       return { success: false, error: `Đã nhập sai 5 lần. Hãy thử lại sau ${remainingMinutes} phút.` };
@@ -757,46 +805,193 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const previousAttempts = loginGuard.lockUntil ? 0 : loginGuard.failedAttempts;
     if (loginGuard.lockUntil) saveLoginGuard(0, null);
     try {
-      const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password: pass });
+      const { data, error } = await supabase.auth.signInWithPassword({ email: email.trim(), password: pass });
       if (error) {
         const invalidCredentials = error.message.toLowerCase().includes('invalid login credentials');
-        if (!invalidCredentials) return { success: false, error: error.message };
+        if (!invalidCredentials) {
+          console.error('Supabase không thể hoàn tất đăng nhập.', error);
+          return { success: false, error: 'Hệ thống tạm thời không thể xử lý yêu cầu. Vui lòng thử lại sau.' };
+        }
         const failedAttempts = previousAttempts + 1;
         const lockUntil = failedAttempts >= 5 ? Date.now() + LOGIN_LOCK_MS : null;
         saveLoginGuard(lockUntil ? 5 : failedAttempts, lockUntil);
         return {
           success: false,
           error: lockUntil
-            ? 'Đã nhập sai 5 lần. Tài khoản tạm khóa 15 phút.'
-            : `Email hoặc mật khẩu chưa đúng. Còn ${5 - failedAttempts} lần thử.`
+            ? 'Đăng nhập tạm khóa 15 phút. Vui lòng thử lại sau.'
+            : 'Tên đăng nhập hoặc mật khẩu không chính xác. Vui lòng thử lại.'
         };
       }
       saveLoginGuard(0, null);
+      try {
+        const activePasswordChangeLock = await readPasswordChangeLock();
+        if (activePasswordChangeLock && data.session?.user.app_metadata.must_change_password === true) {
+          saveLoginGuard(5, activePasswordChangeLock);
+          await supabase.auth.signOut({ scope: 'local' });
+          return { success: false, error: 'Đăng nhập tạm khóa 15 phút. Vui lòng thử lại sau.' };
+        }
+      } catch (error) {
+        console.error('Không thể kiểm tra trạng thái bảo vệ đổi mật khẩu.', error);
+      }
       return { success: true };
     } catch (error) {
       console.error('Không thể đăng nhập Supabase.', error);
-      return { success: false, error: 'Không kết nối được máy chủ. Kiểm tra mạng rồi thử lại.' };
+      return { success: false, error: 'Hệ thống tạm thời không thể xử lý yêu cầu. Vui lòng thử lại sau.' };
     }
   };
 
-  const changeFirstPassword = async (newPass: string, confirmPass: string) => {
-    if (!supabase) return { success: false, error: 'Chưa cấu hình kết nối dữ liệu.' };
-    if (newPass.length < 12) return { success: false, error: 'Mật khẩu cần có ít nhất 12 ký tự.' };
-    if (newPass !== confirmPass) return { success: false, error: 'Hai mật khẩu chưa khớp.' };
-    try {
-      const { error } = await supabase.auth.updateUser({
-        password: newPass,
-        data: { must_change_password: false }
-      });
-      if (error) return { success: false, error: error.message };
-      setIsFirstPasswordChangeRequired(false);
-      navigate('HOME', {}, true);
-      showToast('Đã đổi mật khẩu. Bạn có thể bắt đầu sử dụng hệ thống.');
-      return { success: true };
-    } catch (error) {
-      console.error('Không thể đổi mật khẩu lần đầu.', error);
-      return { success: false, error: 'Không đổi được mật khẩu. Vui lòng thử lại.' };
+  const changeFirstPassword = async (
+    currentPass: string,
+    newPass: string,
+    confirmPass: string,
+    requestId: string
+  ) => {
+    const existingRequest = firstPasswordRequestsRef.current.get(requestId);
+    if (existingRequest) return existingRequest;
+    if (!/^[0-9a-f-]{36}$/i.test(requestId)) {
+      return { success: false, error: 'Yêu cầu không hợp lệ. Vui lòng thử lại.', errorCode: 'INVALID_REQUEST' };
     }
+    if (!supabase || !currentUser || !isAuthenticated || !isFirstPasswordChangeRequired) {
+      return { success: false, error: 'Phiên làm việc đã kết thúc. Vui lòng đăng nhập lại.', errorCode: 'SESSION_INVALID' };
+    }
+    if (!currentPass || !newPass || !confirmPass) {
+      return { success: false, error: 'Vui lòng nhập đầy đủ các trường mật khẩu.', errorCode: 'REQUIRED' };
+    }
+    if (newPass !== confirmPass) {
+      return { success: false, error: 'Xác nhận mật khẩu không khớp.', errorCode: 'CONFIRMATION_MISMATCH' };
+    }
+    if (newPass.length < 12) {
+      return { success: false, error: 'Mật khẩu mới cần có ít nhất 12 ký tự.', errorCode: 'PASSWORD_POLICY' };
+    }
+
+    const operation = (async () => {
+      let passwordWasUpdated = false;
+      let passwordUpdateStarted = false;
+      try {
+        const { data: before } = await supabase.auth.getSession();
+        if (!before.session || before.session.user.id !== currentUser.id ||
+          before.session.user.app_metadata.must_change_password !== true) {
+          return { success: false, error: 'Phiên làm việc đã kết thúc. Vui lòng đăng nhập lại.', errorCode: 'SESSION_INVALID' };
+        }
+        if (sessionRemainingMinutes <= 0) {
+          return { success: false, error: 'Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.', errorCode: 'SESSION_EXPIRED' };
+        }
+
+        if (newPass === currentPass) {
+          return { success: false, error: 'Mật khẩu mới phải khác mật khẩu hiện tại.', errorCode: 'PASSWORD_UNCHANGED' };
+        }
+        passwordUpdateStarted = true;
+        let data: { success?: boolean; error?: string; errorCode?: string; session?: { access_token?: string; refresh_token?: string } } | null = null;
+        let invokeError: Error | null = null;
+        for (let attempt = 0; attempt < 5; attempt += 1) {
+          const result = await supabase.functions.invoke('change-first-password', {
+            body: {
+              requestId,
+              currentPassword: currentPass,
+              newPassword: newPass,
+              confirmPassword: confirmPass
+            }
+          });
+          if (result.error) {
+            invokeError = result.error;
+          } else {
+            data = result.data;
+            invokeError = null;
+          }
+          if (!invokeError && data?.errorCode !== 'PROCESSING') break;
+          if (attempt < 4) await new Promise(resolve => window.setTimeout(resolve, 1000 * (2 ** attempt)));
+        }
+        if (invokeError) throw invokeError;
+        if (!data || typeof data.success !== 'boolean') {
+          throw new Error('Supabase returned an invalid first-password-change response.');
+        }
+        if (data.errorCode === 'PROCESSING') {
+          await supabase.auth.signOut({ scope: 'local' });
+          return {
+            success: false,
+            error: 'Chưa xác định được kết quả đổi mật khẩu. Vui lòng đăng nhập lại hoặc thực hiện quy trình khôi phục tài khoản.',
+            errorCode: 'UNKNOWN_RESULT'
+          };
+        }
+        if (!data.success) {
+          if (data.errorCode === 'LOCKED_OUT' || data.errorCode === 'PASSWORD_UPDATED_RELOGIN') {
+            const activeLock = await readPasswordChangeLock();
+            if (data.errorCode === 'LOCKED_OUT') {
+              passwordChangeLockUntilRef.current = activeLock;
+              setPasswordChangeLockUntil(activeLock);
+              saveLoginGuard(5, activeLock);
+            }
+            await supabase.auth.signOut({ scope: 'local' });
+          }
+          return {
+            success: false,
+            error: typeof data.error === 'string' ? data.error : 'Không thể đổi mật khẩu lúc này. Vui lòng thử lại sau.',
+            errorCode: typeof data.errorCode === 'string' ? data.errorCode : 'UPDATE_FAILED'
+          };
+        }
+
+        passwordWasUpdated = true;
+        const accessToken = data.session?.access_token;
+        const refreshToken = data.session?.refresh_token;
+        if (typeof accessToken !== 'string' || typeof refreshToken !== 'string') {
+          await supabase.auth.signOut({ scope: 'local' });
+          return {
+            success: false,
+            error: 'Mật khẩu đã được cập nhật. Vui lòng đăng nhập lại bằng mật khẩu mới.',
+            errorCode: 'PASSWORD_UPDATED_RELOGIN'
+          };
+        }
+        const { data: newSession, error: sessionError } = await supabase.auth.setSession({
+          access_token: accessToken,
+          refresh_token: refreshToken
+        });
+        if (sessionError || !newSession.session ||
+          newSession.session.user.app_metadata.must_change_password === true) {
+          if (sessionError) console.error('Mật khẩu đã cập nhật nhưng không cấp được phiên quản trị mới.', sessionError);
+          await supabase.auth.signOut({ scope: 'local' });
+          return {
+            success: false,
+            error: 'Mật khẩu đã được cập nhật. Vui lòng đăng nhập lại bằng mật khẩu mới.',
+            errorCode: 'PASSWORD_UPDATED_RELOGIN'
+          };
+        }
+
+        saveLoginGuard(0, null);
+        passwordChangeLockUntilRef.current = null;
+        setPasswordChangeLockUntil(null);
+        showToast('Đổi mật khẩu thành công!');
+        return { success: true };
+      } catch (error) {
+        console.error('Không thể hoàn tất đổi mật khẩu lần đầu.', error);
+        if (passwordWasUpdated) {
+          try {
+            await supabase.auth.signOut({ scope: 'local' });
+          } catch (signOutError) {
+            console.error('Không thể kết thúc phiên tạm sau khi cập nhật mật khẩu.', signOutError);
+          }
+          return {
+            success: false,
+            error: 'Mật khẩu đã được cập nhật. Vui lòng đăng nhập lại bằng mật khẩu mới.',
+            errorCode: 'PASSWORD_UPDATED_RELOGIN'
+          };
+        }
+        if (passwordUpdateStarted) {
+          try {
+            await supabase.auth.signOut({ scope: 'local' });
+          } catch (signOutError) {
+            console.error('Không thể kết thúc phiên sau khi kết quả đổi mật khẩu chưa xác định.', signOutError);
+          }
+          return {
+            success: false,
+            error: 'Chưa xác định được kết quả đổi mật khẩu. Vui lòng đăng nhập lại hoặc thực hiện quy trình khôi phục tài khoản.',
+            errorCode: 'UNKNOWN_RESULT'
+          };
+        }
+        return { success: false, error: 'Không thể đổi mật khẩu lúc này. Vui lòng thử lại sau.', errorCode: 'UPDATE_FAILED' };
+      }
+    })();
+    firstPasswordRequestsRef.current.set(requestId, operation);
+    return operation;
   };
 
   const forgotPassword = async (email: string) => {
@@ -817,8 +1012,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!supabase) return { success: false, error: 'Chưa cấu hình kết nối dữ liệu.' };
     if (newPass.length < 12) return { success: false, error: 'Mật khẩu cần có ít nhất 12 ký tự.' };
     try {
-      const { error } = await supabase.auth.updateUser({ password: newPass });
+      const { error } = await supabase.auth.updateUser({
+        password: newPass,
+        data: { must_change_password: false }
+      });
       if (error) return { success: false, error: error.message };
+      const { error: clearError } = await supabase.rpc('clear_password_change_failures');
+      if (clearError) console.error('Mật khẩu đã cập nhật nhưng không xóa được bộ đếm thử sai.', clearError);
+      const { error: auditError } = await supabase.rpc('record_auth_security_event', { p_event: 'PASSWORD_CHANGE_SUCCESS' });
+      if (auditError) console.error('Mật khẩu đã cập nhật nhưng không ghi được nhật ký bảo mật.', auditError);
       try {
         const { error: signOutError } = await supabase.auth.signOut({ scope: 'global' });
         if (signOutError) {
@@ -853,16 +1055,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!/^[0-9a-f-]{36}$/i.test(requestId)) {
       return { success: false, error: 'Yêu cầu không hợp lệ. Vui lòng thử lại.', errorCode: 'INVALID_REQUEST' };
     }
-    if (passwordChangeLockUntilRef.current && passwordChangeLockUntilRef.current <= Date.now()) {
-      passwordChangeFailedAttemptsRef.current = 0;
-      passwordChangeLockUntilRef.current = null;
-      setPasswordChangeLockUntil(null);
-    }
     if (!supabase || !currentUser) {
       return { success: false, error: 'Phiên làm việc đã kết thúc. Vui lòng đăng nhập lại.', errorCode: 'SESSION_INVALID' };
-    }
-    if (passwordChangeLockUntilRef.current && passwordChangeLockUntilRef.current > Date.now()) {
-      return { success: false, error: 'Tạm thời chưa thể đổi mật khẩu. Vui lòng thử lại sau.', errorCode: 'LOCKED' };
     }
     if (!currentPass || !newPass || !confirmPass) {
       return { success: false, error: 'Vui lòng nhập đầy đủ các trường mật khẩu.', errorCode: 'REQUIRED' };
@@ -877,22 +1071,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const operation = (async () => {
       let updateStarted = false;
       try {
+        const activeLock = await readPasswordChangeLock();
+        if (activeLock) {
+          return { success: false, error: 'Tạm thời chưa thể đổi mật khẩu. Vui lòng thử lại sau.', errorCode: 'LOCKED' };
+        }
         const { data: before } = await supabase.auth.getSession();
         if (!before.session || before.session.user.id !== currentUser.id) {
           return { success: false, error: 'Phiên làm việc đã kết thúc. Vui lòng đăng nhập lại.', errorCode: 'SESSION_INVALID' };
         }
 
         const currentPasswordMatches = await verifyPassword(currentUser.email, currentPass);
-        const { data: afterVerification } = await supabase.auth.getSession();
-        if (!afterVerification.session || afterVerification.session.user.id !== currentUser.id) {
+        const { data: afterVerification } = await supabase.auth.getUser();
+        if (!afterVerification.user || afterVerification.user.id !== currentUser.id ||
+          afterVerification.user.updated_at !== before.session.user.updated_at) {
           return { success: false, error: 'Phiên làm việc đã kết thúc. Vui lòng đăng nhập lại.', errorCode: 'SESSION_INVALID' };
         }
         if (!currentPasswordMatches) {
-          passwordChangeFailedAttemptsRef.current += 1;
-          if (passwordChangeFailedAttemptsRef.current >= PASSWORD_CHANGE_ATTEMPT_LIMIT) {
-            const until = Date.now() + PASSWORD_CHANGE_LOCK_MS;
-            passwordChangeLockUntilRef.current = until;
-            setPasswordChangeLockUntil(until);
+          const { data: lockData, error: lockError } = await supabase.rpc('record_password_change_failure');
+          if (lockError) throw lockError;
+          const lockTimestamp = typeof lockData === 'string' ? Date.parse(lockData) : null;
+          const until = lockTimestamp && lockTimestamp > Date.now() ? lockTimestamp : null;
+          passwordChangeLockUntilRef.current = until;
+          setPasswordChangeLockUntil(until);
+          const { error: auditError } = await supabase.rpc('record_auth_security_event', {
+            p_event: until ? 'PASSWORD_CHANGE_LOCKED' : 'PASSWORD_CHANGE_FAILED'
+          });
+          if (auditError) console.error('Không thể ghi nhật ký xác minh mật khẩu thất bại.', auditError);
+          if (until) {
             await logout();
             showToast('Tạm thời chưa thể đổi mật khẩu. Vui lòng thử lại sau 15 phút.');
             return { success: false, error: 'Đã nhập sai mật khẩu hiện tại 5 lần. Vui lòng thử lại sau 15 phút.', errorCode: 'LOCKED_OUT' };
@@ -909,7 +1114,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           return { success: false, error: updateError.message, errorCode: 'UPDATE_FAILED' };
         }
 
-        passwordChangeFailedAttemptsRef.current = 0;
+        const { error: clearError } = await supabase.rpc('clear_password_change_failures');
+        if (clearError) console.error('Mật khẩu đã cập nhật nhưng không xóa được bộ đếm thử sai.', clearError);
         passwordChangeLockUntilRef.current = null;
         setPasswordChangeLockUntil(null);
         try {
@@ -922,6 +1128,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           console.error('Đổi mật khẩu thành công nhưng lỗi khi thu hồi các phiên khác.', revokeError);
           addAuditLog('CANH_BAO_THU_HOI_PHIEN', 'AUTH', currentUser.id, 'Đổi mật khẩu thành công nhưng thu hồi phiên khác không hoàn tất');
         }
+        const { error: auditError } = await supabase.rpc('record_auth_security_event', { p_event: 'PASSWORD_CHANGE_SUCCESS' });
+        if (auditError) console.error('Mật khẩu đã cập nhật nhưng không ghi được nhật ký bảo mật.', auditError);
         addAuditLog('DOI_MAT_KHAU', 'AUTH', currentUser.id, 'Đổi mật khẩu thành công và yêu cầu thu hồi các phiên cũ');
         showToast('Đổi mật khẩu thành công!');
         return { success: true };
