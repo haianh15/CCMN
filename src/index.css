@@ -1,1 +1,54 @@
 @import "tailwindcss";
+
+@media (max-height: 900px) {
+  .mobile-app .dashboard-home {
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .mobile-app .dashboard-home__content {
+    min-height: 0;
+    overflow-y: hidden;
+    padding: 0.5rem;
+  }
+
+  .mobile-app .dashboard-home__content > :not(:last-child) {
+    margin-block: 0.5rem;
+  }
+
+  .mobile-app .dashboard-home__content > :first-child {
+    padding: 0.75rem;
+  }
+
+  .mobile-app .dashboard-home__content > :nth-child(2) {
+    gap: 0.375rem;
+  }
+
+  .mobile-app .dashboard-home__content > :nth-child(2) > * {
+    padding: 0.375rem;
+  }
+
+  .mobile-app .dashboard-home__shortcuts,
+  .mobile-app .dashboard-home__notice {
+    display: none;
+  }
+}
+
+@media (max-height: 700px) {
+  .mobile-app .dashboard-home__content > :first-child {
+    padding: 0.5rem;
+  }
+
+  .mobile-app .dashboard-home__content > :first-child > div:first-child > div:first-child {
+    gap: 0.5rem;
+  }
+
+  .mobile-app .dashboard-home__content > :first-child > div:last-child {
+    margin-top: 0.5rem;
+    padding-top: 0.5rem;
+  }
+
+  .mobile-app .dashboard-home__content > :nth-child(2) > * > div:last-child {
+    margin-top: 0.25rem;
+  }
+}

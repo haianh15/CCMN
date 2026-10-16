@@ -54,14 +54,14 @@ export const DashboardScreens: React.FC = () => {
   // HOME Screen (F.3)
   if (currentScreenId === 'HOME') {
     return (
-      <div className="flex-1 flex flex-col justify-between bg-slate-50">
+      <div className="dashboard-home flex-1 flex flex-col justify-between bg-slate-50">
         <AppHeader
           title="Tổng Quan Quản Lý"
           subtitle="Chung cư Mini GreenHouse (18 Hoàng Quốc Việt)"
           showBack={false}
         />
 
-        <div className="flex-1 p-3.5 space-y-3.5 overflow-y-auto">
+        <div className="dashboard-home__content flex-1 p-3.5 space-y-3.5 overflow-y-auto xl:grid xl:grid-cols-2 xl:content-start xl:items-start xl:gap-5 xl:space-y-0 xl:p-6">
           {/* Building Hero Card */}
           <div className="rounded-2xl bg-gradient-to-r from-blue-700 via-blue-800 to-indigo-900 text-white p-4 shadow-md relative overflow-hidden">
             <div className="relative z-10 flex items-center justify-between">
@@ -186,7 +186,7 @@ export const DashboardScreens: React.FC = () => {
           </div>
 
           {/* Quick Shortcuts */}
-          <div className="bg-white rounded-2xl p-3.5 border border-slate-200 shadow-xs space-y-2.5">
+          <div className="dashboard-home__shortcuts bg-white rounded-2xl p-3.5 border border-slate-200 shadow-xs space-y-2.5">
             <div className="text-xs font-bold text-slate-900 flex items-center justify-between">
               <span>Lối Tắt Thao Tác Nhanh</span>
               <span className="text-[11px] text-slate-400 font-normal">Quy trình thường dùng</span>
@@ -225,7 +225,7 @@ export const DashboardScreens: React.FC = () => {
           </div>
 
           {/* Action Reminder Banner */}
-          <div className="bg-amber-50 border border-amber-200 rounded-2xl p-3 flex items-start space-x-2.5">
+          <div className="dashboard-home__notice bg-amber-50 border border-amber-200 rounded-2xl p-3 flex items-start space-x-2.5">
             <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
             <div className="text-xs text-amber-900">
               <strong className="block font-bold">Lưu ý nghiệp vụ tháng 10/2026:</strong>
