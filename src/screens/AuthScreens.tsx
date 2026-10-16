@@ -42,24 +42,33 @@ export const AuthScreens: React.FC = () => {
     login,
     changeFirstPassword,
     isFirstPasswordChangeRequired,
+    isAuthenticated,
+    authLoading,
     lockUntil,
+    passwordChangeLockUntil,
     forgotPassword,
     resetPassword,
     changePassword,
     currentUser,
     navigate,
-    logout
+    goBack,
+    logout,
+    showToast
   } = useApp();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [currentPassword, setCurrentPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [firstPasswordError, setFirstPasswordError] = useState<string | null>(null);
   const [lockSeconds, setLockSeconds] = useState(0);
+  const [passwordChangeLockSeconds, setPasswordChangeLockSeconds] = useState(0);
+  const [accountPasswordSuccess, setAccountPasswordSuccess] = useState<string | null>(null);
+  const accountRequestId = React.useRef<string | null>(null);
 
   useEffect(() => {
     if (!lockUntil || lockUntil <= Date.now()) {
@@ -72,6 +81,24 @@ export const AuthScreens: React.FC = () => {
     return () => window.clearInterval(timer);
   }, [lockUntil]);
 
+  useEffect(() => {
+    if (!passwordChangeLockUntil || passwordChangeLockUntil <= Date.now()) {
+      setPasswordChangeLockSeconds(0);
+      return;
+    }
+    const updateLock = () => setPasswordChangeLockSeconds(Math.max(0, Math.ceil((passwordChangeLockUntil - Date.now()) / 1000)));
+    updateLock();
+    const timer = window.setInterval(updateLock, 1000);
+    return () => window.clearInterval(timer);
+  }, [passwordChangeLockUntil]);
+
+  useEffect(() => {
+    if (currentScreenId === 'ACCOUNT' && !authLoading && !isAuthenticated) {
+      navigate('LOGIN', {}, true);
+      showToast('Phiên làm việc đã kết thúc. Vui lòng đăng nhập lại.');
+    }
+  }, [currentScreenId, authLoading, isAuthenticated]);
+
   const submitLogin = async (event: React.FormEvent) => {
     event.preventDefault();
     setBusy(true);
@@ -79,6 +106,55 @@ export const AuthScreens: React.FC = () => {
     const result = await login(email, password);
     setBusy(false);
     if (!result.success) setError(result.error || 'Không đăng nhập được. Vui lòng thử lại.');
+  };
+
+  const submitAccountPassword = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setError(null);
+    setAccountPasswordSuccess(null);
+    if (!currentPassword) {
+      setError('Mật khẩu hiện tại là trường bắt buộc.');
+      return;
+    }
+    if (!newPassword) {
+      setError('Mật khẩu mới là trường bắt buộc.');
+      return;
+    }
+    if (!confirmPassword) {
+      setError('Xác nhận mật khẩu mới là trường bắt buộc.');
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setError('Xác nhận mật khẩu không khớp.');
+      return;
+    }
+    if (newPassword.length < 12) {
+      setError('Mật khẩu mới cần có ít nhất 12 ký tự.');
+      return;
+    }
+    if (!accountRequestId.current) accountRequestId.current = crypto.randomUUID();
+    setBusy(true);
+    const result = await changePassword(currentPassword, newPassword, confirmPassword, accountRequestId.current);
+    setBusy(false);
+    if (!result.success) {
+      setError(result.error || 'Không thể đổi mật khẩu lúc này. Vui lòng thử lại sau.');
+      if (result.errorCode === 'UNKNOWN_RESULT') {
+        setCurrentPassword('');
+        setNewPassword('');
+        setConfirmPassword('');
+        await logout();
+        navigate('LOGIN', {}, true);
+        showToast('Chưa xác định được kết quả đổi mật khẩu. Vui lòng đăng nhập lại hoặc khôi phục tài khoản.');
+      } else {
+        accountRequestId.current = null;
+      }
+      return;
+    }
+    accountRequestId.current = null;
+    setCurrentPassword('');
+    setNewPassword('');
+    setConfirmPassword('');
+    setAccountPasswordSuccess('Đổi mật khẩu thành công!');
   };
 
   const submitForgotPassword = async (event: React.FormEvent) => {
@@ -126,7 +202,6 @@ export const AuthScreens: React.FC = () => {
               label="Mật khẩu mới"
               type="password"
               autoComplete="new-password"
-              minLength={12}
               required
               value={newPassword}
               onChange={event => setNewPassword(event.target.value)}
@@ -136,7 +211,6 @@ export const AuthScreens: React.FC = () => {
               label="Nhập lại mật khẩu"
               type="password"
               autoComplete="new-password"
-              minLength={12}
               required
               value={confirmPassword}
               onChange={event => setConfirmPassword(event.target.value)}
@@ -156,26 +230,42 @@ export const AuthScreens: React.FC = () => {
   }
 
   if (currentScreenId === 'ACCOUNT') {
+    if (authLoading || !isAuthenticated || isFirstPasswordChangeRequired || !currentUser) return null;
+    const accountLocked = passwordChangeLockSeconds > 0;
     return (
       <div className="flex min-h-full w-full items-start justify-center p-4 sm:items-center">
         <AuthCard>
           <button
             type="button"
-            onClick={() => navigate('SETTINGS')}
+            onClick={() => {
+              setCurrentPassword('');
+              setNewPassword('');
+              setConfirmPassword('');
+              goBack();
+            }}
             className="mb-5 inline-flex items-center gap-1.5 text-sm font-medium text-slate-600 hover:text-slate-900"
           >
             <ArrowLeft className="h-4 w-4" /> Quay lại
           </button>
-          <h2 className="text-lg font-semibold text-slate-900">Tài khoản</h2>
-          <p className="mt-1 break-all text-sm text-slate-600">{currentUser?.email}</p>
-          <form onSubmit={event => submitPassword(event, changePassword)} className="mt-5 space-y-4">
+          <h2 className="text-lg font-semibold text-slate-900">Xem tài khoản và đổi mật khẩu</h2>
+          <p className="mt-3 text-sm font-medium text-slate-700">Tên đăng nhập</p>
+          <p className="mt-1 break-all rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-700">{currentUser.username}</p>
+          <form onSubmit={submitAccountPassword} className="mt-5 space-y-4">
             {error && <ErrorMessage>{error}</ErrorMessage>}
+            {accountPasswordSuccess && <p role="status" className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">{accountPasswordSuccess}</p>}
+            {accountLocked && <ErrorMessage>Tạm thời chưa thể đổi mật khẩu. Vui lòng thử lại sau {Math.ceil(passwordChangeLockSeconds / 60)} phút.</ErrorMessage>}
+            <Field
+              label="Mật khẩu hiện tại"
+              type="password"
+              autoComplete="current-password"
+              value={currentPassword}
+              onChange={event => setCurrentPassword(event.target.value)}
+              placeholder="Nhập mật khẩu hiện tại"
+            />
             <Field
               label="Mật khẩu mới"
               type="password"
               autoComplete="new-password"
-              minLength={12}
-              required
               value={newPassword}
               onChange={event => setNewPassword(event.target.value)}
               placeholder="Ít nhất 12 ký tự"
@@ -184,18 +274,18 @@ export const AuthScreens: React.FC = () => {
               label="Nhập lại mật khẩu"
               type="password"
               autoComplete="new-password"
-              required
               value={confirmPassword}
               onChange={event => setConfirmPassword(event.target.value)}
               placeholder="Nhập lại mật khẩu mới"
             />
             <button
               type="submit"
-              disabled={busy}
+              disabled={busy || accountLocked}
               className="min-h-11 w-full rounded-lg bg-blue-600 px-4 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-wait disabled:opacity-60"
             >
               {busy ? 'Đang cập nhật...' : 'Đổi mật khẩu'}
             </button>
+            <p className="text-xs leading-5 text-slate-500">Mật khẩu mới phải có ít nhất 12 ký tự, khác mật khẩu hiện tại; xác nhận phải khớp.</p>
           </form>
           <button
             type="button"

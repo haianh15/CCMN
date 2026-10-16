@@ -28,6 +28,8 @@ Không đưa khóa `service_role` vào ứng dụng hoặc Vercel dưới tên b
 - Mọi thay đổi được tự động lưu sau một khoảng ngắn. Thanh trạng thái đầu trang báo đang lưu, đã lưu hoặc có lỗi.
 - Nếu nhiều thiết bị cùng sửa một lúc, ứng dụng phát hiện phiên bản dữ liệu xung đột và yêu cầu tải lại để tránh ghi đè.
 - Mỗi tài khoản có dữ liệu riêng. Chia sẻ một tòa nhà giữa nhiều tài khoản cần bổ sung chức năng thành viên/chia sẻ sau.
+- Màn hình tài khoản chỉ truy cập khi đã đăng nhập; đổi mật khẩu yêu cầu xác minh mật khẩu hiện tại, mật khẩu mới từ 12 ký tự và xác nhận khớp. Sau khi đổi, phiên hiện tại được giữ và ứng dụng yêu cầu Supabase thu hồi các phiên khác. Đặt lại mật khẩu qua email kết thúc phiên và yêu cầu đăng nhập lại.
+- Bộ đếm 5 lần sai cho chức năng đổi mật khẩu được giữ trong phiên chạy hiện tại của trình duyệt; kiểm soát chống thử sai có thẩm quyền vẫn cần được cấu hình ở dịch vụ phía máy chủ.
 
 ## Lệnh
 
