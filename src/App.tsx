@@ -15,16 +15,22 @@ import { ReportScreens } from './screens/ReportScreens';
 import { SettingScreens } from './screens/SettingScreens';
 
 const MainRouter: React.FC = () => {
-  const { currentScreenId } = useApp();
+  const { currentScreenId, params, isAuthenticated } = useApp();
+  const screenKey = `${currentScreenId}:${JSON.stringify(params)}`;
+  const authScreens = ['START', 'LOGIN', 'FIRSTPASS', 'FORGOT', 'RESET', 'ACCOUNT'];
+
+  if (!isAuthenticated && !authScreens.includes(currentScreenId)) {
+    return <AuthScreens key={screenKey} />;
+  }
 
   // Auth & Account screens
-  if (['START', 'LOGIN', 'FIRSTPASS', 'FORGOT', 'RESET', 'ACCOUNT'].includes(currentScreenId)) {
-    return <AuthScreens />;
+  if (authScreens.includes(currentScreenId)) {
+    return <AuthScreens key={screenKey} />;
   }
 
   // Dashboard screens
   if (['HOME', 'MORE'].includes(currentScreenId)) {
-    return <DashboardScreens />;
+    return <DashboardScreens key={screenKey} />;
   }
 
   // Room screens
@@ -32,7 +38,7 @@ const MainRouter: React.FC = () => {
     currentScreenId === 'ROOMS' ||
     currentScreenId.startsWith('ROOM_')
   ) {
-    return <RoomScreens />;
+    return <RoomScreens key={screenKey} />;
   }
 
   // Tenant screens
@@ -40,7 +46,7 @@ const MainRouter: React.FC = () => {
     currentScreenId === 'TENANTS' ||
     currentScreenId.startsWith('TENANT_')
   ) {
-    return <TenantScreens />;
+    return <TenantScreens key={screenKey} />;
   }
 
   // Contract screens
@@ -49,7 +55,7 @@ const MainRouter: React.FC = () => {
     currentScreenId === 'RENTAL_TERMS' ||
     currentScreenId.startsWith('CONTRACT_')
   ) {
-    return <ContractScreens />;
+    return <ContractScreens key={screenKey} />;
   }
 
   // Asset screens
@@ -57,7 +63,7 @@ const MainRouter: React.FC = () => {
     currentScreenId === 'ASSET' ||
     currentScreenId.startsWith('ASSET_')
   ) {
-    return <AssetScreens />;
+    return <AssetScreens key={screenKey} />;
   }
 
   // Return & checkout screens
@@ -65,7 +71,7 @@ const MainRouter: React.FC = () => {
     currentScreenId === 'RETURN' ||
     currentScreenId.startsWith('RETURN_')
   ) {
-    return <ReturnScreens />;
+    return <ReturnScreens key={screenKey} />;
   }
 
   // Billing & payment screens
@@ -73,7 +79,7 @@ const MainRouter: React.FC = () => {
     currentScreenId === 'PAY' ||
     currentScreenId.startsWith('PAY_')
   ) {
-    return <BillingScreens />;
+    return <BillingScreens key={screenKey} />;
   }
 
   // Overdue debt screens
@@ -81,7 +87,7 @@ const MainRouter: React.FC = () => {
     currentScreenId === 'DEBT' ||
     currentScreenId.startsWith('DEBT_')
   ) {
-    return <DebtScreens />;
+    return <DebtScreens key={screenKey} />;
   }
 
   // Deposit settlement screens
@@ -89,7 +95,7 @@ const MainRouter: React.FC = () => {
     currentScreenId === 'DEPOSIT' ||
     currentScreenId.startsWith('DEPOSIT_')
   ) {
-    return <DepositScreens />;
+    return <DepositScreens key={screenKey} />;
   }
 
   // Report screens
@@ -97,7 +103,7 @@ const MainRouter: React.FC = () => {
     currentScreenId === 'REPORTS' ||
     currentScreenId.startsWith('REPORT_')
   ) {
-    return <ReportScreens />;
+    return <ReportScreens key={screenKey} />;
   }
 
   // Setting screens
@@ -105,11 +111,11 @@ const MainRouter: React.FC = () => {
     currentScreenId === 'SETTINGS' ||
     currentScreenId.startsWith('SET_')
   ) {
-    return <SettingScreens />;
+    return <SettingScreens key={screenKey} />;
   }
 
   // Fallback to Dashboard
-  return <DashboardScreens />;
+  return <DashboardScreens key={screenKey} />;
 };
 
 export default function App() {

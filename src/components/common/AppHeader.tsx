@@ -1,7 +1,6 @@
 import React from 'react';
-import { ArrowLeft, CheckCircle2, RotateCcw, ShieldCheck } from 'lucide-react';
+import { ArrowLeft } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
-import { ALL_86_SCREENS } from '../../data/sitemapRegistry';
 
 interface AppHeaderProps {
   title: string;
@@ -9,7 +8,6 @@ interface AppHeaderProps {
   showBack?: boolean;
   onBack?: () => void;
   rightAction?: React.ReactNode;
-  onOpenQAMatrix?: () => void;
 }
 
 export const AppHeader: React.FC<AppHeaderProps> = ({
@@ -17,8 +15,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   subtitle,
   showBack = true,
   onBack,
-  rightAction,
-  onOpenQAMatrix
+  rightAction
 }) => {
   const { currentScreenId, goBack, historyStack } = useApp();
   const isTopTab = ['HOME', 'ROOMS', 'TENANTS', 'PAY', 'MORE', 'START', 'LOGIN'].includes(currentScreenId);

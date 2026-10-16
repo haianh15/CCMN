@@ -17,6 +17,7 @@ import {
 import { useApp } from '../context/AppContext';
 import { AppHeader } from '../components/common/AppHeader';
 import { BottomTabs } from '../components/common/BottomTabs';
+import { MissingRecord } from '../components/common/MissingRecord';
 import { CheckoutProtocol } from '../types';
 
 export const ReturnScreens: React.FC = () => {
@@ -37,10 +38,10 @@ export const ReturnScreens: React.FC = () => {
     verifyReturnAndFreeRoom
   } = useApp();
 
-  const targetRoomId = (params.roomId as string) || 'P303';
-  const currentRoom = rooms.find(r => r.id === targetRoomId) || rooms[0];
+  const targetRoomId = params.roomId as string | undefined;
+  const currentRoom = (targetRoomId ? rooms.find(r => r.id === targetRoomId) : undefined)!;
   const currentTenant = tenants.find(t => t.id === currentRoom?.currentTenantId);
-  const currentProtocol = checkoutProtocols.find(p => p.roomId === currentRoom?.id) || checkoutProtocols[0];
+  const currentProtocol = checkoutProtocols.find(p => p.roomId === currentRoom?.id);
   const roomAssets = assetItems.filter(item => item.roomId === currentRoom?.id);
   const currentSettlement = depositSettlements.find(s => s.roomId === currentRoom?.id);
 
@@ -57,6 +58,10 @@ export const ReturnScreens: React.FC = () => {
 
   // RETURN_FINAL form
   const [finalPaperProof, setFinalPaperProof] = useState(currentProtocol?.paperProofUrl || 'https://images.unsplash.com/photo-1450133064473-71024230f91b?auto=format&fit=crop&w=400&q=80');
+
+  if (!targetRoomId || !rooms.some(room => room.id === targetRoomId)) {
+    return <MissingRecord title="Quy trình trả phòng" message="Phòng được chọn không còn tồn tại." backTo="ROOMS" />;
+  }
 
   // 1. RETURN Stepper Screen (F.8)
   if (currentScreenId === 'RETURN') {
@@ -441,10 +446,12 @@ export const ReturnScreens: React.FC = () => {
 
             {/* Link 39 to DEPOSIT_DETAIL */}
             <button
-              onClick={() => navigate('DEPOSIT_DETAIL', { settlementId: currentSettlement?.id || 'QTC-P401' })}
+              onClick={() => currentSettlement
+                ? navigate('DEPOSIT_DETAIL', { settlementId: currentSettlement.id, roomId: currentRoom.id })
+                : navigate('DEPOSIT_NEW', { roomId: currentRoom.id })}
               className="w-full py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-xl text-xs flex items-center justify-center space-x-1 cursor-pointer"
             >
-              <span>Xem Chi Tiết Quyết Toán Cọc</span>
+              <span>{currentSettlement ? 'Xem Chi Tiết Quyết Toán Cọc' : 'Lập Quyết Toán Cọc'}</span>
               <ExternalLink className="w-3.5 h-3.5" />
             </button>
           </div>

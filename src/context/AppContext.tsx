@@ -60,6 +60,30 @@ export interface NavigationEntry {
   params?: Record<string, any>;
 }
 
+interface PersistedAppData {
+  rooms: Room[];
+  tenants: Tenant[];
+  coResidents: CoResident[];
+  contracts: Contract[];
+  rentalTerms: Record<string, RentalTerms>;
+  assetItems: AssetInventoryItem[];
+  assetReports: AssetStatusReport[];
+  handoverProtocols: AssetHandoverProtocol[];
+  incidents: AssetIncident[];
+  checkoutPlans: CheckoutPlan[];
+  checkoutProtocols: CheckoutProtocol[];
+  tariffs: TariffConfig[];
+  bankConfigs: BankConfig[];
+  periods: BillingPeriod[];
+  meterReadings: MeterReading[];
+  calculations: PeriodCalculation[];
+  notices: PaymentNotice[];
+  transactions: PaymentTransaction[];
+  overdueDebts: OverdueDebt[];
+  depositSettlements: DepositSettlement[];
+  auditLogs: AuditLog[];
+}
+
 interface AppContextType {
   // Auth
   isAuthenticated: boolean;
@@ -165,8 +189,6 @@ interface AppContextType {
   saveTariffConfig: (newTariff: Omit<TariffConfig, 'id' | 'isActive'>) => void;
   saveBankConfig: (newBank: Omit<BankConfig, 'id' | 'isActive'>) => void;
 
-  // Demo utilities
-  resetAllData: () => void;
   toastMessage: string | null;
   showToast: (msg: string) => void;
 }
@@ -174,17 +196,60 @@ interface AppContextType {
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 const LOCAL_STORAGE_KEY = 'MINI_APARTMENT_STORE_V1';
+const SIGNED_OUT_SESSION_KEY = 'MINI_APARTMENT_SIGNED_OUT';
+
+const readSignedOutSession = () => {
+  try {
+    return sessionStorage.getItem(SIGNED_OUT_SESSION_KEY) === 'true';
+  } catch (error) {
+    console.error('Không thể đọc trạng thái đăng nhập trong phiên trình duyệt.', error);
+    return false;
+  }
+};
+
+const saveSignedOutSession = (signedOut: boolean) => {
+  try {
+    if (signedOut) {
+      sessionStorage.setItem(SIGNED_OUT_SESSION_KEY, 'true');
+    } else {
+      sessionStorage.removeItem(SIGNED_OUT_SESSION_KEY);
+    }
+    return true;
+  } catch (error) {
+    console.error('Không thể lưu trạng thái đăng nhập trong phiên trình duyệt.', error);
+    return false;
+  }
+};
+
+const readPersistedAppData = (): Partial<PersistedAppData> => {
+  try {
+    const rawData = localStorage.getItem(LOCAL_STORAGE_KEY);
+    if (!rawData) return {};
+
+    const parsed: unknown = JSON.parse(rawData);
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      throw new Error('Dữ liệu lưu cục bộ không đúng định dạng.');
+    }
+    return parsed as Partial<PersistedAppData>;
+  } catch (error) {
+    console.error('Không thể đọc dữ liệu đã lưu trong trình duyệt.', error);
+    return {};
+  }
+};
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const [persistedData] = useState(readPersistedAppData);
+  const [initiallySignedOut] = useState(readSignedOutSession);
+
   // Auth state
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(true); // Default logged-in for immediate demo UX, with easy test to logout
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(!initiallySignedOut);
   const [currentUser, setCurrentUser] = useState<{
     username: string;
     fullName: string;
     role: 'CHU_NHA';
     phone: string;
     email: string;
-  } | null>({
+  } | null>(initiallySignedOut ? null : {
     username: 'admin',
     fullName: 'Nguyễn Văn Minh (Chủ nhà)',
     role: 'CHU_NHA',
@@ -197,34 +262,34 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [sessionRemainingMinutes] = useState<number>(30);
 
   // Navigation state
-  const [currentScreenId, setCurrentScreenId] = useState<ScreenId>('HOME');
+  const [currentScreenId, setCurrentScreenId] = useState<ScreenId>(initiallySignedOut ? 'LOGIN' : 'HOME');
   const [params, setParams] = useState<Record<string, any>>({});
   const [historyStack, setHistoryStack] = useState<NavigationEntry[]>([{ screenId: 'HOME' }]);
   const [activeBottomTab, setActiveBottomTab] = useState<'HOME' | 'ROOMS' | 'TENANTS' | 'PAY' | 'MORE'>('HOME');
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   // Entities state
-  const [rooms, setRooms] = useState<Room[]>(INITIAL_ROOMS);
-  const [tenants, setTenants] = useState<Tenant[]>(INITIAL_TENANTS);
-  const [coResidents, setCoResidents] = useState<CoResident[]>(INITIAL_CO_RESIDENTS);
-  const [contracts, setContracts] = useState<Contract[]>(INITIAL_CONTRACTS);
-  const [rentalTerms, setRentalTerms] = useState<Record<string, RentalTerms>>(INITIAL_RENTAL_TERMS);
-  const [assetItems, setAssetItems] = useState<AssetInventoryItem[]>(INITIAL_ASSET_ITEMS);
-  const [assetReports, setAssetReports] = useState<AssetStatusReport[]>(INITIAL_ASSET_REPORTS);
-  const [handoverProtocols, setHandoverProtocols] = useState<AssetHandoverProtocol[]>(INITIAL_HANDOVER_PROTOCOLS);
-  const [incidents, setIncidents] = useState<AssetIncident[]>(INITIAL_INCIDENTS);
-  const [checkoutPlans, setCheckoutPlans] = useState<CheckoutPlan[]>(INITIAL_CHECKOUT_PLANS);
-  const [checkoutProtocols, setCheckoutProtocols] = useState<CheckoutProtocol[]>(INITIAL_CHECKOUT_PROTOCOLS);
-  const [tariffs, setTariffs] = useState<TariffConfig[]>(INITIAL_TARIFFS);
-  const [bankConfigs, setBankConfigs] = useState<BankConfig[]>(INITIAL_BANK_CONFIGS);
-  const [periods, setPeriods] = useState<BillingPeriod[]>(INITIAL_PERIODS);
-  const [meterReadings, setMeterReadings] = useState<MeterReading[]>(INITIAL_METER_READINGS);
-  const [calculations, setCalculations] = useState<PeriodCalculation[]>(INITIAL_CALCULATIONS);
-  const [notices, setNotices] = useState<PaymentNotice[]>(INITIAL_PAYMENT_NOTICES);
-  const [transactions, setTransactions] = useState<PaymentTransaction[]>(INITIAL_PAYMENT_TRANSACTIONS);
-  const [overdueDebts, setOverdueDebts] = useState<OverdueDebt[]>(INITIAL_OVERDUE_DEBTS);
-  const [depositSettlements, setDepositSettlements] = useState<DepositSettlement[]>(INITIAL_DEPOSIT_SETTLEMENTS);
-  const [auditLogs, setAuditLogs] = useState<AuditLog[]>([
+  const [rooms, setRooms] = useState<Room[]>(persistedData.rooms || INITIAL_ROOMS);
+  const [tenants, setTenants] = useState<Tenant[]>(persistedData.tenants || INITIAL_TENANTS);
+  const [coResidents, setCoResidents] = useState<CoResident[]>(persistedData.coResidents || INITIAL_CO_RESIDENTS);
+  const [contracts, setContracts] = useState<Contract[]>(persistedData.contracts || INITIAL_CONTRACTS);
+  const [rentalTerms, setRentalTerms] = useState<Record<string, RentalTerms>>(persistedData.rentalTerms || INITIAL_RENTAL_TERMS);
+  const [assetItems, setAssetItems] = useState<AssetInventoryItem[]>(persistedData.assetItems || INITIAL_ASSET_ITEMS);
+  const [assetReports, setAssetReports] = useState<AssetStatusReport[]>(persistedData.assetReports || INITIAL_ASSET_REPORTS);
+  const [handoverProtocols, setHandoverProtocols] = useState<AssetHandoverProtocol[]>(persistedData.handoverProtocols || INITIAL_HANDOVER_PROTOCOLS);
+  const [incidents, setIncidents] = useState<AssetIncident[]>(persistedData.incidents || INITIAL_INCIDENTS);
+  const [checkoutPlans, setCheckoutPlans] = useState<CheckoutPlan[]>(persistedData.checkoutPlans || INITIAL_CHECKOUT_PLANS);
+  const [checkoutProtocols, setCheckoutProtocols] = useState<CheckoutProtocol[]>(persistedData.checkoutProtocols || INITIAL_CHECKOUT_PROTOCOLS);
+  const [tariffs, setTariffs] = useState<TariffConfig[]>(persistedData.tariffs || INITIAL_TARIFFS);
+  const [bankConfigs, setBankConfigs] = useState<BankConfig[]>(persistedData.bankConfigs || INITIAL_BANK_CONFIGS);
+  const [periods, setPeriods] = useState<BillingPeriod[]>(persistedData.periods || INITIAL_PERIODS);
+  const [meterReadings, setMeterReadings] = useState<MeterReading[]>(persistedData.meterReadings || INITIAL_METER_READINGS);
+  const [calculations, setCalculations] = useState<PeriodCalculation[]>(persistedData.calculations || INITIAL_CALCULATIONS);
+  const [notices, setNotices] = useState<PaymentNotice[]>(persistedData.notices || INITIAL_PAYMENT_NOTICES);
+  const [transactions, setTransactions] = useState<PaymentTransaction[]>(persistedData.transactions || INITIAL_PAYMENT_TRANSACTIONS);
+  const [overdueDebts, setOverdueDebts] = useState<OverdueDebt[]>(persistedData.overdueDebts || INITIAL_OVERDUE_DEBTS);
+  const [depositSettlements, setDepositSettlements] = useState<DepositSettlement[]>(persistedData.depositSettlements || INITIAL_DEPOSIT_SETTLEMENTS);
+  const [auditLogs, setAuditLogs] = useState<AuditLog[]>(persistedData.auditLogs || [
     {
       id: 'LOG-001',
       timestamp: '15/10/2026 08:30:00',
@@ -234,6 +299,61 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       details: 'Khởi động hệ thống quản lý chung cư mini với 12 phòng và 15 hồ sơ khách thuê',
       user: 'Nguyễn Văn Minh'
     }
+  ]);
+
+  useEffect(() => {
+    const data: PersistedAppData = {
+      rooms,
+      tenants,
+      coResidents,
+      contracts,
+      rentalTerms,
+      assetItems,
+      assetReports,
+      handoverProtocols,
+      incidents,
+      checkoutPlans,
+      checkoutProtocols,
+      tariffs,
+      bankConfigs,
+      periods,
+      meterReadings,
+      calculations,
+      notices,
+      transactions,
+      overdueDebts,
+      depositSettlements,
+      auditLogs
+    };
+
+    try {
+      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(data));
+    } catch (error) {
+      console.error('Không thể lưu dữ liệu vào trình duyệt.', error);
+      showToast('Không thể lưu dữ liệu. Vui lòng kiểm tra dung lượng trình duyệt.');
+    }
+  }, [
+    rooms,
+    tenants,
+    coResidents,
+    contracts,
+    rentalTerms,
+    assetItems,
+    assetReports,
+    handoverProtocols,
+    incidents,
+    checkoutPlans,
+    checkoutProtocols,
+    tariffs,
+    bankConfigs,
+    periods,
+    meterReadings,
+    calculations,
+    notices,
+    transactions,
+    overdueDebts,
+    depositSettlements,
+    auditLogs
   ]);
 
   const showToast = (msg: string) => {
@@ -274,7 +394,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } else {
       setHistoryStack(prev => [...prev, { screenId, params: newParams }]);
     }
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    document.querySelector('.app-viewport')?.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const goBack = () => {
@@ -288,6 +408,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (['HOME', 'ROOMS', 'TENANTS', 'PAY', 'MORE'].includes(prevEntry.screenId)) {
         setActiveBottomTab(prevEntry.screenId as any);
       }
+      document.querySelector('.app-viewport')?.scrollTo({ top: 0, behavior: 'smooth' });
     } else {
       // Default to home
       setCurrentScreenId('HOME');
@@ -304,6 +425,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     if (user.trim() === 'admin' && pass === 'Admin@12345678') {
       setFailedAttempts(0);
+      saveSignedOutSession(false);
       setIsAuthenticated(true);
       setCurrentUser({
         username: 'admin',
@@ -318,6 +440,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } else if (user.trim() === 'firstuser' && pass === '123456') {
       // First-time user test
       setFailedAttempts(0);
+      saveSignedOutSession(false);
       setIsAuthenticated(false);
       setIsFirstPasswordChangeRequired(true);
       navigate('FIRSTPASS');
@@ -342,6 +465,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { success: false, error: 'Mật khẩu xác nhận không khớp.' };
     }
     setIsFirstPasswordChangeRequired(false);
+    saveSignedOutSession(false);
     setIsAuthenticated(true);
     setCurrentUser({
       username: 'firstuser',
@@ -394,11 +518,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const logout = () => {
+    const sessionSaved = saveSignedOutSession(true);
     setIsAuthenticated(false);
     setCurrentUser(null);
     addAuditLog('DANG_XUAT', 'AUTH', 'user', 'Đã đăng xuất và xóa phiên');
     navigate('LOGIN', {}, true);
-    showToast('Đã đăng xuất thành công.');
+    showToast(sessionSaved
+      ? 'Đã đăng xuất thành công.'
+      : 'Đã đăng xuất trong trang hiện tại, nhưng trình duyệt không lưu được trạng thái phiên.');
   };
 
   // Room methods
@@ -892,9 +1019,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const room = rooms.find(r => r.id === roomId);
     if (!room) return { success: false, error: 'Phòng không tồn tại.' };
 
-    const oldReading = meterReadings.find(m => m.roomId === roomId);
-    const elOld = oldReading ? oldReading.electricNew : 1000;
-    const waOld = oldReading ? oldReading.waterNew : 30;
+    const previousReading = meterReadings
+      .filter(m => m.roomId === roomId && m.id !== existing?.id)
+      .at(-1);
+    const elOld = existing?.electricOld ?? previousReading?.electricNew ?? 1000;
+    const waOld = existing?.waterOld ?? previousReading?.waterNew ?? 30;
 
     if (elNew < elOld) {
       return { success: false, error: `Số điện mới (${elNew}) không được nhỏ hơn số cũ (${elOld}). Vui lòng kiểm tra lại công tơ.` };
@@ -1237,34 +1366,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     showToast('Đã cập nhật tài khoản ngân hàng nhận tiền cho các thông báo mới!');
   };
 
-  const resetAllData = () => {
-    setRooms(INITIAL_ROOMS);
-    setTenants(INITIAL_TENANTS);
-    setCoResidents(INITIAL_CO_RESIDENTS);
-    setContracts(INITIAL_CONTRACTS);
-    setRentalTerms(INITIAL_RENTAL_TERMS);
-    setAssetItems(INITIAL_ASSET_ITEMS);
-    setAssetReports(INITIAL_ASSET_REPORTS);
-    setHandoverProtocols(INITIAL_HANDOVER_PROTOCOLS);
-    setIncidents(INITIAL_INCIDENTS);
-    setCheckoutPlans(INITIAL_CHECKOUT_PLANS);
-    setCheckoutProtocols(INITIAL_CHECKOUT_PROTOCOLS);
-    setTariffs(INITIAL_TARIFFS);
-    setBankConfigs(INITIAL_BANK_CONFIGS);
-    setPeriods(INITIAL_PERIODS);
-    setMeterReadings(INITIAL_METER_READINGS);
-    setCalculations(INITIAL_CALCULATIONS);
-    setNotices(INITIAL_PAYMENT_NOTICES);
-    setTransactions(INITIAL_PAYMENT_TRANSACTIONS);
-    setOverdueDebts(INITIAL_OVERDUE_DEBTS);
-    setDepositSettlements(INITIAL_DEPOSIT_SETTLEMENTS);
-    setCurrentScreenId('HOME');
-    setActiveBottomTab('HOME');
-    setParams({});
-    setHistoryStack([{ screenId: 'HOME' }]);
-    showToast('Đã đặt lại toàn bộ dữ liệu mẫu (12 phòng, 15 khách, hợp đồng, cọc, chỉ số)!');
-  };
-
   return (
     <AppContext.Provider
       value={{
@@ -1361,7 +1462,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         saveTariffConfig,
         saveBankConfig,
 
-        resetAllData,
         toastMessage,
         showToast
       }}

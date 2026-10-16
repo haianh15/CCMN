@@ -20,6 +20,7 @@ import {
 import { useApp } from '../context/AppContext';
 import { AppHeader } from '../components/common/AppHeader';
 import { BottomTabs } from '../components/common/BottomTabs';
+import { MissingRecord } from '../components/common/MissingRecord';
 import { StatusBadge } from '../components/common/StatusBadge';
 import { Contract, ContractStatus } from '../types';
 
@@ -40,22 +41,31 @@ export const ContractScreens: React.FC = () => {
     signRenewContract
   } = useApp();
 
-  const targetContractId = (params.contractId as string) || 'HD-2026-001';
-  const currentContract = contracts.find(c => c.id === targetContractId) || contracts[0];
+  const targetContractId = params.contractId as string | undefined;
+  const contractRequired = !['CONTRACTS', 'RENTAL_TERMS', 'CONTRACT_NEW'].includes(currentScreenId);
+  const currentContract = (targetContractId
+    ? contracts.find(c => c.id === targetContractId)
+    : params.roomId
+      ? contracts.find(c => c.roomId === params.roomId)
+      : contractRequired ? undefined : contracts[0])!;
   const contractRoom = rooms.find(r => r.id === currentContract?.roomId);
   const contractTenant = tenants.find(t => t.id === currentContract?.tenantId);
+  const firstVacantRoom = rooms.find(room => room.status === 'TRONG');
+  const firstProspectiveTenant = tenants.find(tenant => tenant.status === 'TIEM_NANG');
 
   // Search & filter for CONTRACTS list
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<'ALL' | ContractStatus>('ALL');
 
   // RENTAL_TERMS form
-  const [termRoomId, setTermRoomId] = useState(params.roomId as string || 'P103');
-  const [termTenantId, setTermTenantId] = useState(params.tenantId as string || 'KT003');
+  const [termRoomId, setTermRoomId] = useState((params.roomId as string | undefined) || firstVacantRoom?.id || '');
+  const [termTenantId, setTermTenantId] = useState((params.tenantId as string | undefined) || firstProspectiveTenant?.id || '');
   const [termDuration, setTermDuration] = useState<number>(12);
   const [termStart, setTermStart] = useState('20/10/2026');
   const [termEnd, setTermEnd] = useState('20/10/2027');
-  const [termRent, setTermRent] = useState<number>(4200000);
+  const [termRent, setTermRent] = useState<number>(() =>
+    rentalTerms[termRoomId]?.monthlyRent ?? rooms.find(room => room.id === termRoomId)?.basePrice ?? 0
+  );
   const [termServiceFee, setTermServiceFee] = useState<number>(150000);
   const [termNotes, setTermNotes] = useState('Khách thanh toán tiền mặt/chuyển khoản đầu tháng');
 
@@ -70,6 +80,11 @@ export const ContractScreens: React.FC = () => {
 
   // CONTRACT_EDIT form
   const [editTermsText, setEditTermsText] = useState(currentContract?.terms || '');
+
+  const contractDetailScreens = ['CONTRACT_DETAIL', 'CONTRACT_EDIT', 'CONTRACT_SIGN', 'CONTRACT_RENEW', 'CONTRACT_RENEW_SIGN'];
+  if (contractDetailScreens.includes(currentScreenId) && !currentContract) {
+    return <MissingRecord title="Chi tiết hợp đồng" message="Không tìm thấy hợp đồng tương ứng với dữ liệu đã chọn." backTo="CONTRACTS" />;
+  }
 
   // 1. CONTRACTS Screen (F.6)
   if (currentScreenId === 'CONTRACTS') {
@@ -90,7 +105,7 @@ export const ContractScreens: React.FC = () => {
           subtitle={`${contracts.length} hợp đồng quản lý`}
           rightAction={
             <button
-              onClick={() => navigate('RENTAL_TERMS', { roomId: 'P103', tenantId: 'KT003' })}
+              onClick={() => navigate('RENTAL_TERMS', { roomId: firstVacantRoom?.id, tenantId: firstProspectiveTenant?.id })}
               className="px-2.5 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold flex items-center space-x-1"
             >
               <Plus className="w-3.5 h-3.5" />
@@ -145,7 +160,7 @@ export const ContractScreens: React.FC = () => {
           </div>
         </div>
 
-        <div className="flex-1 p-3 space-y-2 overflow-y-auto">
+        <div className="responsive-card-grid flex-1 p-3 space-y-2 overflow-y-auto">
           {filteredContracts.map(c => {
             const room = rooms.find(r => r.id === c.roomId);
             const tenant = tenants.find(t => t.id === c.tenantId);

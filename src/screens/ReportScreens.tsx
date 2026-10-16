@@ -27,6 +27,8 @@ export const ReportScreens: React.FC = () => {
     contracts,
     transactions,
     calculations,
+    overdueDebts,
+    periods,
     showToast
   } = useApp();
 
@@ -35,7 +37,9 @@ export const ReportScreens: React.FC = () => {
   const pendingCheckoutRooms = rooms.filter(r => r.status === 'SAP_TRA');
   const unresolvedRooms = rooms.filter(r => r.status === 'CHUA_BAN_GIAO_XONG');
   const totalRooms = rooms.length;
-  const occupancyRate = Math.round((occupiedRooms.length / totalRooms) * 100);
+  const occupancyRate = totalRooms ? Math.round((occupiedRooms.length / totalRooms) * 100) : 0;
+  const latestCalculation = calculations[calculations.length - 1];
+  const latestPeriod = periods.find(period => period.id === latestCalculation?.periodId) || periods[periods.length - 1];
 
   // Financial calculations
   const totalCollected = transactions
@@ -259,11 +263,21 @@ export const ReportScreens: React.FC = () => {
             <div className="p-3 rounded-xl border border-slate-200 bg-slate-50 flex items-center justify-between">
               <div>
                 <strong className="text-slate-900 font-bold">1. Kiểm tra nguồn tính tiền kỳ:</strong>
-                <p className="text-[11px] text-slate-500">Đối chiếu bảng tính kỳ 10/2026 với biểu giá V2</p>
+                <p className="text-[11px] text-slate-500">
+                  {latestCalculation
+                    ? `Đối chiếu phòng ${latestCalculation.roomId}, kỳ ${latestPeriod?.monthYear || latestCalculation.periodId}`
+                    : 'Chưa có bảng tính tiền để đối chiếu'}
+                </p>
               </div>
               {/* Cross-link 51 to PAY_CALC */}
               <button
-                onClick={() => navigate('PAY_CALC', { periodId: 'KY-2026-10', roomId: 'P101' })}
+                onClick={() => latestCalculation
+                  ? navigate('PAY_CALC', {
+                    periodId: latestCalculation.periodId,
+                    roomId: latestCalculation.roomId,
+                    calcId: latestCalculation.id
+                  })
+                  : navigate('PAY_PERIOD')}
                 className="px-2.5 py-1.5 bg-blue-50 text-blue-700 font-semibold rounded-lg text-xs hover:bg-blue-100 flex items-center space-x-1 cursor-pointer shrink-0 ml-2"
               >
                 <span>Sửa tại tính tiền</span>
@@ -312,13 +326,15 @@ export const ReportScreens: React.FC = () => {
         <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-xs space-y-3 text-xs">
           <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-1">
             <span className="font-bold text-slate-900 text-sm">Chung cư Mini GreenHouse</span>
-            <div className="text-[11px] text-slate-500">Kỳ báo cáo: Tháng 10/2026 • 12 phòng căn hộ</div>
+            <div className="text-[11px] text-slate-500">
+              Kỳ báo cáo: {latestPeriod?.monthYear || 'Chưa có kỳ'} • {totalRooms} phòng căn hộ
+            </div>
           </div>
 
           <div className="space-y-1.5 p-3 rounded-xl bg-slate-50 border border-slate-100">
             <div className="flex justify-between">
               <span>Tỷ lệ lấp đầy:</span>
-              <strong className="text-blue-700">{occupancyRate}% ({occupiedRooms.length}/12 phòng)</strong>
+              <strong className="text-blue-700">{occupancyRate}% ({occupiedRooms.length}/{totalRooms} phòng)</strong>
             </div>
             <div className="flex justify-between">
               <span>Tổng doanh thu thực tế đã thu:</span>
@@ -326,7 +342,9 @@ export const ReportScreens: React.FC = () => {
             </div>
             <div className="flex justify-between">
               <span>Công nợ quá hạn tồn đọng:</span>
-              <strong className="font-mono text-rose-700">6.400.000 đ (1 khoản)</strong>
+              <strong className="font-mono text-rose-700">
+                {overdueDebts.reduce((sum, debt) => sum + debt.unpaidAmount, 0).toLocaleString()} đ ({overdueDebts.length} khoản)
+              </strong>
             </div>
             <div className="flex justify-between">
               <span>Tiền cọc đang giữ của khách:</span>

@@ -1,54 +1,148 @@
 @import "tailwindcss";
 
-@media (max-height: 900px) {
-  .mobile-app .dashboard-home {
+html,
+body,
+#root {
+  min-width: 320px;
+  min-height: 100%;
+  margin: 0;
+}
+
+body {
+  overflow: hidden;
+}
+
+.app-viewport > * {
+  width: 100%;
+  min-width: 0;
+}
+
+.app-viewport :is(input, select, textarea, button) {
+  max-width: 100%;
+}
+
+.app-viewport img {
+  max-width: 100%;
+  height: auto;
+}
+
+.responsive-card-grid {
+  align-content: start;
+}
+
+.responsive-section-grid {
+  align-content: start;
+}
+
+@media (max-width: 639px) and (max-height: 900px) {
+  .dashboard-home {
     min-height: 0;
     overflow: hidden;
   }
 
-  .mobile-app .dashboard-home__content {
+  .dashboard-home__content {
     min-height: 0;
     overflow-y: hidden;
     padding: 0.5rem;
   }
 
-  .mobile-app .dashboard-home__content > :not(:last-child) {
+  .dashboard-home__content > :not(:last-child) {
     margin-block: 0.5rem;
   }
 
-  .mobile-app .dashboard-home__content > :first-child {
+  .dashboard-home__content > :first-child {
     padding: 0.75rem;
   }
 
-  .mobile-app .dashboard-home__content > :nth-child(2) {
+  .dashboard-home__content > :nth-child(2) {
     gap: 0.375rem;
   }
 
-  .mobile-app .dashboard-home__content > :nth-child(2) > * {
+  .dashboard-home__content > :nth-child(2) > * {
     padding: 0.375rem;
   }
 
-  .mobile-app .dashboard-home__shortcuts,
-  .mobile-app .dashboard-home__notice {
+  .dashboard-home__shortcuts,
+  .dashboard-home__notice {
     display: none;
   }
 }
 
-@media (max-height: 700px) {
-  .mobile-app .dashboard-home__content > :first-child {
+@media (max-width: 639px) and (max-height: 700px) {
+  .dashboard-home__content > :first-child {
     padding: 0.5rem;
   }
 
-  .mobile-app .dashboard-home__content > :first-child > div:first-child > div:first-child {
+  .dashboard-home__content > :first-child > div:first-child > div:first-child {
     gap: 0.5rem;
   }
 
-  .mobile-app .dashboard-home__content > :first-child > div:last-child {
+  .dashboard-home__content > :first-child > div:last-child {
     margin-top: 0.5rem;
     padding-top: 0.5rem;
   }
 
-  .mobile-app .dashboard-home__content > :nth-child(2) > * > div:last-child {
+  .dashboard-home__content > :nth-child(2) > * > div:last-child {
     margin-top: 0.25rem;
+  }
+}
+
+@media (min-width: 768px) {
+  .app-viewport {
+    overscroll-behavior: contain;
+  }
+
+  .app-viewport > * {
+    max-width: 1600px;
+    margin-inline: auto;
+  }
+
+  .app-viewport > * > .overflow-y-auto {
+    scrollbar-gutter: stable;
+  }
+
+  .responsive-card-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr));
+    gap: 1rem;
+  }
+
+  .responsive-card-grid > * {
+    margin: 0 !important;
+  }
+
+  .responsive-section-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr));
+    align-items: start;
+    gap: 1.5rem;
+  }
+
+  .responsive-section-grid > * {
+    margin: 0 !important;
+  }
+
+  .app-viewport .text-xs {
+    font-size: 0.8125rem;
+    line-height: 1.45;
+  }
+
+  .app-viewport [class~="text-[10px]"] {
+    font-size: 0.75rem;
+  }
+
+  .app-viewport [class~="text-[11px]"] {
+    font-size: 0.8125rem;
+  }
+
+  .app-viewport [class~="text-[9px]"] {
+    font-size: 0.6875rem;
+  }
+}
+
+@media (min-width: 1024px) {
+  .app-viewport .bg-white:has(> form) {
+    width: min(100% - 3rem, 1080px);
+    margin-inline: auto;
   }
 }

@@ -24,6 +24,7 @@ import {
 import { useApp } from '../context/AppContext';
 import { AppHeader } from '../components/common/AppHeader';
 import { BottomTabs } from '../components/common/BottomTabs';
+import { MissingRecord } from '../components/common/MissingRecord';
 import { StatusBadge } from '../components/common/StatusBadge';
 import { Room, RoomStatus } from '../types';
 
@@ -36,6 +37,7 @@ export const RoomScreens: React.FC = () => {
     tenants,
     contracts,
     checkoutPlans,
+    assetItems,
     createRoom,
     updateRoom,
     confirmInitialPayment,
@@ -46,8 +48,11 @@ export const RoomScreens: React.FC = () => {
   } = useApp();
 
   // Selected room resolution
-  const targetRoomId = (params.roomId as string) || 'P101';
-  const currentRoom = rooms.find(r => r.id === targetRoomId) || rooms[0];
+  const targetRoomId = params.roomId as string | undefined;
+  const roomRequired = !['ROOMS', 'ROOM_NEW', 'ROOM_TERM'].includes(currentScreenId);
+  const currentRoom = (targetRoomId
+    ? rooms.find(r => r.id === targetRoomId)
+    : roomRequired ? undefined : rooms[0])!;
   const currentTenant = tenants.find(t => t.id === currentRoom?.currentTenantId);
   const currentContract = contracts.find(c => c.roomId === currentRoom?.id && (c.status === 'HIEU_LUC' || c.status === 'DA_KY' || c.status === 'NHAP'));
   const currentPlan = checkoutPlans.find(p => p.roomId === currentRoom?.id);
@@ -88,6 +93,10 @@ export const RoomScreens: React.FC = () => {
   // ROOM_PLAN_FEED form state
   const [feedChannel, setFeedChannel] = useState('Zalo');
   const [feedContent, setFeedContent] = useState('');
+
+  if (roomRequired && (!targetRoomId || !rooms.some(room => room.id === targetRoomId))) {
+    return <MissingRecord title="Chi tiết phòng" message="Phòng được chọn không còn tồn tại hoặc đã bị xóa." backTo="ROOMS" />;
+  }
 
   // 1. ROOMS Screen (F.3 / F.4)
   if (currentScreenId === 'ROOMS') {
@@ -163,7 +172,7 @@ export const RoomScreens: React.FC = () => {
         </div>
 
         {/* Room cards grid */}
-        <div className="flex-1 p-3 space-y-2 overflow-y-auto">
+        <div className="responsive-card-grid flex-1 p-3 space-y-2 overflow-y-auto">
           {filteredRooms.length === 0 ? (
             <div className="text-center py-12 bg-white rounded-2xl border border-slate-200 p-6">
               <KeyRound className="w-10 h-10 text-slate-300 mx-auto mb-2" />
@@ -615,9 +624,12 @@ export const RoomScreens: React.FC = () => {
 
   // 5. ROOM_CHECK Screen (F.4 - Cross-link 10)
   if (currentScreenId === 'ROOM_CHECK') {
-    const isClean = true;
-    const isAssetReady = true;
     const isVacant = currentRoom.status === 'TRONG';
+    const roomAssets = assetItems.filter(item => item.roomId === currentRoom.id);
+    const isClean = isVacant && !/chưa dọn|chưa vệ sinh|chưa bàn giao/i.test(currentRoom.note || '');
+    const isAssetReady = roomAssets.length > 0 && roomAssets.every(item => !item.isDamagedOrMissing);
+    const passedChecks = [isVacant, isClean, isAssetReady].filter(Boolean).length;
+    const prospectiveTenant = tenants.find(tenant => tenant.status === 'TIEM_NANG');
 
     return (
       <div className="flex-1 flex flex-col p-4 bg-slate-50 space-y-3">
@@ -631,32 +643,36 @@ export const RoomScreens: React.FC = () => {
           <div className="font-bold text-slate-900 pb-2 border-b border-slate-100 flex items-center justify-between">
             <span>Danh mục điều kiện kiểm tra:</span>
             <span className="text-[10px] font-mono text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded">
-              3/3 Tiêu chí đạt
+              {passedChecks}/3 Tiêu chí đạt
             </span>
           </div>
 
           <div className="space-y-2">
-            <div className="p-2.5 rounded-xl bg-emerald-50 border border-emerald-200 flex items-start space-x-2">
-              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+            <div className={`p-2.5 rounded-xl border flex items-start space-x-2 ${isVacant ? 'bg-emerald-50 border-emerald-200' : 'bg-rose-50 border-rose-200'}`}>
+              {isVacant ? <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" /> : <XCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />}
               <div>
-                <strong className="font-semibold text-emerald-900">Trạng thái phòng: TRỐNG</strong>
-                <p className="text-[11px] text-emerald-700">Không có tranh chấp hoặc vướng mắc bàn giao từ lượt thuê trước.</p>
+                <strong className={isVacant ? 'font-semibold text-emerald-900' : 'font-semibold text-rose-900'}>
+                  Trạng thái phòng: {isVacant ? 'TRỐNG' : currentRoom.status.replaceAll('_', ' ')}
+                </strong>
+                <p className="text-[11px] text-slate-600">{currentRoom.note || 'Chưa có ghi chú cho phòng này.'}</p>
               </div>
             </div>
 
-            <div className="p-2.5 rounded-xl bg-emerald-50 border border-emerald-200 flex items-start space-x-2">
-              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+            <div className={`p-2.5 rounded-xl border flex items-start space-x-2 ${isClean ? 'bg-emerald-50 border-emerald-200' : 'bg-amber-50 border-amber-200'}`}>
+              {isClean ? <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" /> : <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />}
               <div>
                 <strong className="font-semibold text-emerald-900">Hiện trạng vệ sinh & công năng</strong>
-                <p className="text-[11px] text-emerald-700">Đã dọn dẹp vệ sinh sạch sẽ, hệ thống điện nước hoạt động bình thường.</p>
+                <p className="text-[11px] text-slate-600">{isClean ? 'Phòng trống và không ghi nhận vướng mắc vệ sinh.' : 'Cần kiểm tra và ghi nhận hiện trạng phòng trước khi cho thuê.'}</p>
               </div>
             </div>
 
-            <div className="p-2.5 rounded-xl bg-emerald-50 border border-emerald-200 flex items-start space-x-2">
-              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+            <div className={`p-2.5 rounded-xl border flex items-start space-x-2 ${isAssetReady ? 'bg-emerald-50 border-emerald-200' : 'bg-amber-50 border-amber-200'}`}>
+              {isAssetReady ? <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" /> : <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />}
               <div>
                 <strong className="font-semibold text-emerald-900">Tài sản bàn giao đầy đủ</strong>
-                <p className="text-[11px] text-emerald-700">Điều hòa, nóng lạnh, giường tủ đã được kiểm kê sẵn sàng.</p>
+                <p className="text-[11px] text-slate-600">
+                  {roomAssets.length ? `${roomAssets.length} hạng mục được ghi nhận; ${isAssetReady ? 'không có tài sản hư hỏng hoặc thiếu.' : 'cần kiểm kê/khắc phục trước khi cho thuê.'}` : 'Chưa có danh mục tài sản kiểm kê cho phòng này.'}
+                </p>
               </div>
             </div>
           </div>
@@ -664,8 +680,9 @@ export const RoomScreens: React.FC = () => {
           {/* Cross-link 10 to RENTAL_TERMS */}
           <div className="pt-2">
             <button
-              onClick={() => navigate('RENTAL_TERMS', { roomId: currentRoom.id, tenantId: 'KT003' })}
-              className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-xs flex items-center justify-center space-x-2 shadow-md cursor-pointer"
+              onClick={() => navigate('RENTAL_TERMS', { roomId: currentRoom.id, tenantId: prospectiveTenant?.id })}
+              disabled={!isVacant || !isClean || !isAssetReady}
+              className="w-full py-3 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white font-bold rounded-xl text-xs flex items-center justify-center space-x-2 shadow-md cursor-pointer"
             >
               <span>Đủ Điều Kiện → Thỏa Thuận Điều Kiện Thuê</span>
               <ArrowRight className="w-4 h-4" />
@@ -803,7 +820,9 @@ export const RoomScreens: React.FC = () => {
                 </p>
               </div>
               <button
-                onClick={() => navigate('CONTRACT_DETAIL', { roomId: currentRoom.id, contractId: currentContract?.id || 'HD-2026-001' })}
+                onClick={() => currentContract
+                  ? navigate('CONTRACT_DETAIL', { roomId: currentRoom.id, contractId: currentContract.id })
+                  : navigate('CONTRACTS')}
                 className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold shrink-0 ml-2 cursor-pointer"
               >
                 Xem HĐ (#21)
@@ -918,6 +937,26 @@ export const RoomScreens: React.FC = () => {
 
   // 9. ROOM_TERM Screen (F.4 - Cross-links 1, 28)
   if (currentScreenId === 'ROOM_TERM') {
+    const currentDate = new Date();
+    currentDate.setHours(0, 0, 0, 0);
+    const expiringContracts = contracts
+      .filter(contract => {
+        if (contract.status !== 'HIEU_LUC') return false;
+        const [day, month, year] = contract.endDate.split('/').map(Number);
+        const endDate = new Date(year, month - 1, day);
+        const daysRemaining = Math.ceil((endDate.getTime() - currentDate.getTime()) / 86400000);
+        return Number.isFinite(endDate.getTime()) && daysRemaining >= 0 && daysRemaining <= 60;
+      })
+      .map(contract => ({
+        contract,
+        room: rooms.find(room => room.id === contract.roomId),
+        tenant: tenants.find(tenant => tenant.id === contract.tenantId),
+        daysRemaining: Math.ceil(((() => {
+          const [day, month, year] = contract.endDate.split('/').map(Number);
+          return new Date(year, month - 1, day).getTime();
+        })() - currentDate.getTime()) / 86400000)
+      }));
+
     return (
       <div className="flex-1 flex flex-col p-4 bg-slate-50 space-y-3">
         <AppHeader
@@ -930,32 +969,36 @@ export const RoomScreens: React.FC = () => {
           <div className="text-xs font-bold text-slate-900 flex items-center justify-between">
             <span>Hợp Đồng Sắp Hết Hạn (&lt; 60 Ngày)</span>
             <span className="text-[10px] bg-amber-50 text-amber-800 font-mono px-2 py-0.5 rounded">
-              1 hợp đồng
+              {expiringContracts.length} hợp đồng
             </span>
           </div>
 
-          {/* Room 201 Item */}
-          <div className="p-3 rounded-xl border border-amber-200 bg-amber-50/40 space-y-2">
-            <div className="flex items-center justify-between">
-              <span className="font-bold text-slate-900 text-xs">Phòng 201 • Phạm Minh Đức</span>
-              <span className="text-[11px] text-amber-700 font-bold bg-amber-100 px-2 py-0.5 rounded-full">
-                Còn 13 ngày
-              </span>
-            </div>
-            <div className="text-[11px] text-slate-600">
-              Hợp đồng: HD-2026-004 • Hạn kết thúc: <strong>01/11/2026</strong>
-            </div>
-            <div className="pt-1 flex space-x-2">
-              {/* Link 28 to ROOM_PLAN */}
+          {expiringContracts.length ? expiringContracts.map(({ contract, room, tenant, daysRemaining }) => (
+            <div key={contract.id} className="p-3 rounded-xl border border-amber-200 bg-amber-50/40 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-slate-900 text-xs">
+                  Phòng {room?.roomNumber || contract.roomId} • {tenant?.fullName || 'Chưa gán khách'}
+                </span>
+                <span className="text-[11px] text-amber-700 font-bold bg-amber-100 px-2 py-0.5 rounded-full">
+                  Còn {daysRemaining} ngày
+                </span>
+              </div>
+              <div className="text-[11px] text-slate-600">
+                Hợp đồng: {contract.code} • Hạn kết thúc: <strong>{contract.endDate}</strong>
+              </div>
               <button
-                onClick={() => navigate('ROOM_PLAN', { roomId: 'P201' })}
-                className="flex-1 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-semibold flex items-center justify-center space-x-1 cursor-pointer"
+                onClick={() => navigate('ROOM_PLAN', { roomId: contract.roomId })}
+                className="w-full py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-semibold flex items-center justify-center space-x-1 cursor-pointer"
               >
-                <span>Xem Kế Hoạch Trả Phòng</span>
+                <span>Xem kế hoạch phòng {room?.roomNumber || contract.roomId}</span>
                 <ArrowRight className="w-3.5 h-3.5" />
               </button>
             </div>
-          </div>
+          )) : (
+            <div className="rounded-xl border border-dashed border-slate-300 p-5 text-center text-xs text-slate-500">
+              Không có hợp đồng nào hết hạn trong 60 ngày tới.
+            </div>
+          )}
         </div>
       </div>
     );

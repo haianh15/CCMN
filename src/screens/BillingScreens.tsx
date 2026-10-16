@@ -22,6 +22,7 @@ import {
 import { useApp } from '../context/AppContext';
 import { AppHeader } from '../components/common/AppHeader';
 import { BottomTabs } from '../components/common/BottomTabs';
+import { MissingRecord } from '../components/common/MissingRecord';
 import { StatusBadge } from '../components/common/StatusBadge';
 import { PeriodCalculation, PaymentNotice, PaymentTransaction } from '../types';
 
@@ -49,24 +50,39 @@ export const BillingScreens: React.FC = () => {
     showToast
   } = useApp();
 
-  const targetPeriodId = (params.periodId as string) || 'KY-2026-10';
-  const currentPeriod = periods.find(p => p.id === targetPeriodId) || periods[1] || periods[0];
-  const targetRoomId = (params.roomId as string) || 'P101';
-  const currentRoom = rooms.find(r => r.id === targetRoomId) || rooms[0];
-  const currentReading = meterReadings.find(m => m.periodId === currentPeriod?.id && m.roomId === currentRoom?.id) || meterReadings[2] || meterReadings[0];
-  const currentCalc = calculations.find(c => c.periodId === currentPeriod?.id && c.roomId === currentRoom?.id) || calculations[0];
-  const targetNoticeId = (params.noticeId as string) || (notices[1]?.id || notices[0]?.id || 'TB-2026-10-101');
-  const currentNotice = notices.find(n => n.id === targetNoticeId) || notices[0];
-  const currentTx = transactions.find(t => t.noticeId === currentNotice?.id) || transactions[0];
+  const targetPeriodId = params.periodId as string | undefined;
+  const periodRequired = ['PAY_METER', 'PAY_METER_EDIT', 'PAY_CALC', 'PAY_RECON', 'PAY_NOTICE_NEW'].includes(currentScreenId);
+  const currentPeriod = (targetPeriodId
+    ? periods.find(p => p.id === targetPeriodId)
+    : periodRequired ? undefined : periods[periods.length - 1])!;
+  const targetRoomId = params.roomId as string | undefined;
+  const roomRequired = ['PAY_METER', 'PAY_METER_EDIT', 'PAY_CALC', 'PAY_RECON', 'PAY_NOTICE_NEW'].includes(currentScreenId);
+  const currentRoom = (targetRoomId
+    ? rooms.find(r => r.id === targetRoomId)
+    : roomRequired ? undefined : rooms.find(r => r.status === 'DANG_THUE') || rooms[0])!;
+  const currentReading = meterReadings.find(m => m.periodId === currentPeriod?.id && m.roomId === currentRoom?.id);
+  const previousReading = meterReadings
+    .filter(reading => reading.roomId === currentRoom?.id && reading.periodId !== currentPeriod?.id)
+    .at(-1);
+  const targetCalcId = params.calcId as string | undefined;
+  const currentCalc = (targetCalcId
+    ? calculations.find(c => c.id === targetCalcId)
+    : calculations.find(c => c.periodId === currentPeriod?.id && c.roomId === currentRoom?.id))!;
+  const targetNoticeId = params.noticeId as string | undefined;
+  const currentNotice = (targetNoticeId
+    ? notices.find(n => n.id === targetNoticeId)
+    : notices.find(n => n.periodId === currentPeriod?.id && n.roomId === currentRoom?.id) ||
+      (!['PAY_NOTICE_DETAIL', 'PAY_CONFIRM', 'PAY_CORRECT'].includes(currentScreenId) ? notices[notices.length - 1] : undefined))!;
+  const currentTx = (currentNotice ? transactions.find(t => t.noticeId === currentNotice.id) : undefined)!;
 
   // PAY_METER form
-  const [meterElNew, setMeterElNew] = useState<number>(currentReading ? currentReading.electricNew : 1535);
-  const [meterWaNew, setMeterWaNew] = useState<number>(currentReading ? currentReading.waterNew : 61);
+  const [meterElNew, setMeterElNew] = useState<number>(currentReading?.electricNew ?? previousReading?.electricNew ?? 1000);
+  const [meterWaNew, setMeterWaNew] = useState<number>(currentReading?.waterNew ?? previousReading?.waterNew ?? 30);
   const [meterError, setMeterError] = useState<string | null>(null);
 
   // PAY_METER_EDIT form
-  const [editElNew, setEditElNew] = useState<number>(currentReading ? currentReading.electricNew : 1535);
-  const [editWaNew, setEditWaNew] = useState<number>(currentReading ? currentReading.waterNew : 61);
+  const [editElNew, setEditElNew] = useState<number>(currentReading?.electricNew ?? previousReading?.electricNew ?? 1000);
+  const [editWaNew, setEditWaNew] = useState<number>(currentReading?.waterNew ?? previousReading?.waterNew ?? 30);
   const [editMeterReason, setEditMeterReason] = useState('Khách phản hồi công tơ nhìn nhầm số hàng đơn vị');
   const [editMeterError, setEditMeterError] = useState<string | null>(null);
 
@@ -74,17 +90,45 @@ export const BillingScreens: React.FC = () => {
   const [noticeDueDate, setNoticeDueDate] = useState('20/10/2026');
 
   // PAY_CONFIRM form
-  const [confirmAmount, setConfirmAmount] = useState<number>(currentNotice ? currentNotice.totalAmount : 5505000);
+  const [confirmAmount, setConfirmAmount] = useState<number>(currentNotice?.totalAmount || 0);
   const [confirmRefCode, setConfirmRefCode] = useState(`MB-FT${Date.now().toString().slice(-6)}`);
   const [confirmError, setConfirmError] = useState<string | null>(null);
 
   // PAY_CORRECT form
-  const [correctAmount, setCorrectAmount] = useState<number>(currentTx?.receivedAmount || 5505000);
+  const [correctAmount, setCorrectAmount] = useState<number>(currentTx?.receivedAmount || 0);
   const [correctReason, setCorrectReason] = useState('Đối chiếu lại sao kê ngân hàng phát hiện nhầm mã phòng');
   const [correctError, setCorrectError] = useState<string | null>(null);
 
   // Search in PAY_TRACK
   const [trackSearch, setTrackSearch] = useState('');
+
+  if (targetPeriodId && !periods.some(period => period.id === targetPeriodId)) {
+    return <MissingRecord title="Kỳ thanh toán" message="Kỳ thanh toán được chọn không còn tồn tại." backTo="PAY" />;
+  }
+  if (targetRoomId && !rooms.some(room => room.id === targetRoomId)) {
+    return <MissingRecord title="Thông tin thanh toán" message="Phòng được chọn không còn tồn tại." backTo="ROOMS" />;
+  }
+  if (targetCalcId && !calculations.some(calculation => calculation.id === targetCalcId)) {
+    return <MissingRecord title="Bảng tính tiền" message="Bảng tính tiền được chọn không còn tồn tại." backTo="PAY" />;
+  }
+  if (targetNoticeId && !notices.some(notice => notice.id === targetNoticeId)) {
+    return <MissingRecord title="Thông báo thanh toán" message="Thông báo thanh toán được chọn không còn tồn tại." backTo="PAY" />;
+  }
+  if (roomRequired && (!targetPeriodId || !targetRoomId || !currentPeriod || !currentRoom)) {
+    return <MissingRecord title="Thông tin thanh toán" message="Hãy chọn một kỳ thanh toán và phòng hợp lệ trước khi tiếp tục." backTo="PAY" />;
+  }
+  if (currentScreenId === 'PAY_METER_EDIT' && !currentReading) {
+    return <MissingRecord title="Sửa chỉ số" message="Phòng và kỳ này chưa có chỉ số để sửa. Hãy ghi chỉ số trước." backTo="PAY_METER" />;
+  }
+  if (['PAY_CALC', 'PAY_RECON', 'PAY_NOTICE_NEW'].includes(currentScreenId) && !currentCalc) {
+    return <MissingRecord title="Bảng tính tiền" message="Chưa có bảng tính cho phòng và kỳ đã chọn. Hãy ghi chỉ số điện nước trước." backTo="PAY_METER" />;
+  }
+  if (['PAY_NOTICE_DETAIL', 'PAY_CONFIRM', 'PAY_CORRECT'].includes(currentScreenId) && !currentNotice) {
+    return <MissingRecord title="Thông báo thanh toán" message="Không có thông báo thanh toán tương ứng với lựa chọn này." backTo="PAY" />;
+  }
+  if (currentScreenId === 'PAY_CORRECT' && !currentTx) {
+    return <MissingRecord title="Giao dịch thanh toán" message="Không tìm thấy giao dịch cần điều chỉnh." backTo="PAY_TRACK" />;
+  }
 
   // 1. PAY Hub Screen (F.3 / F.9)
   if (currentScreenId === 'PAY') {
@@ -120,7 +164,7 @@ export const BillingScreens: React.FC = () => {
             <div className="space-y-2 pt-1">
               {/* Task 1: PAY_METER */}
               <div
-                onClick={() => navigate('PAY_METER', { periodId: currentPeriod?.id, roomId: 'P101' })}
+                onClick={() => navigate('PAY_METER', { periodId: currentPeriod?.id, roomId: currentRoom?.id })}
                 className="p-3 rounded-xl bg-slate-50 hover:bg-blue-50 border border-slate-200/80 transition-colors cursor-pointer flex items-center justify-between"
               >
                 <div className="flex items-center space-x-2.5">
@@ -137,7 +181,7 @@ export const BillingScreens: React.FC = () => {
 
               {/* Task 2: PAY_CALC */}
               <div
-                onClick={() => navigate('PAY_CALC', { periodId: currentPeriod?.id, roomId: 'P101' })}
+                onClick={() => navigate('PAY_CALC', { periodId: currentPeriod?.id, roomId: currentRoom?.id })}
                 className="p-3 rounded-xl bg-slate-50 hover:bg-blue-50 border border-slate-200/80 transition-colors cursor-pointer flex items-center justify-between"
               >
                 <div className="flex items-center space-x-2.5">
@@ -154,7 +198,7 @@ export const BillingScreens: React.FC = () => {
 
               {/* Task 3: PAY_RECON */}
               <div
-                onClick={() => navigate('PAY_RECON', { periodId: currentPeriod?.id, roomId: 'P101' })}
+                onClick={() => navigate('PAY_RECON', { periodId: currentPeriod?.id, roomId: currentRoom?.id })}
                 className="p-3 rounded-xl bg-slate-50 hover:bg-blue-50 border border-slate-200/80 transition-colors cursor-pointer flex items-center justify-between"
               >
                 <div className="flex items-center space-x-2.5">
@@ -222,10 +266,16 @@ export const BillingScreens: React.FC = () => {
         />
 
         <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-xs space-y-2.5 text-xs">
-          {periods.map(p => (
-            <div
+          {periods.map(p => {
+            const roomForPeriod = rooms.find(room =>
+              calculations.some(calculation => calculation.periodId === p.id && calculation.roomId === room.id)
+            ) || rooms.find(room =>
+              meterReadings.some(reading => reading.periodId === p.id && reading.roomId === room.id)
+            ) || rooms[0];
+
+            return <div
               key={p.id}
-              onClick={() => navigate('PAY_CALC', { periodId: p.id, roomId: 'P101' })}
+              onClick={() => navigate('PAY_CALC', { periodId: p.id, roomId: roomForPeriod?.id })}
               className="p-3 rounded-xl border border-slate-200 bg-slate-50 hover:bg-blue-50 transition-colors cursor-pointer space-y-1.5"
             >
               <div className="flex items-center justify-between">
@@ -242,8 +292,8 @@ export const BillingScreens: React.FC = () => {
               <div className="text-[11px] text-slate-600">
                 • Dịch vụ điện nước vừa dùng: <strong>{p.serviceForPeriodMonthYear}</strong>
               </div>
-            </div>
-          ))}
+            </div>;
+          })}
         </div>
       </div>
     );
@@ -251,8 +301,8 @@ export const BillingScreens: React.FC = () => {
 
   // 3. PAY_METER Screen (F.9 - Cross-link 40)
   if (currentScreenId === 'PAY_METER') {
-    const elOld = currentReading ? currentReading.electricOld : 1390;
-    const waOld = currentReading ? currentReading.waterOld : 53;
+    const elOld = currentReading?.electricOld ?? previousReading?.electricNew ?? 1000;
+    const waOld = currentReading?.waterOld ?? previousReading?.waterNew ?? 30;
 
     const handleSaveMeter = (e: React.FormEvent) => {
       e.preventDefault();
@@ -353,7 +403,7 @@ export const BillingScreens: React.FC = () => {
     const handleSaveMeterEdit = (e: React.FormEvent) => {
       e.preventDefault();
       setEditMeterError(null);
-      const res = editMeterReading(currentReading.id, Number(editElNew), Number(editWaNew), editMeterReason);
+      const res = editMeterReading(currentReading!.id, Number(editElNew), Number(editWaNew), editMeterReason);
       if (res.success) {
         // Cross-link 41 to PAY_CALC (recalculate)
         calculatePeriodForRoom(currentPeriod.id, currentRoom.id);
@@ -577,7 +627,7 @@ export const BillingScreens: React.FC = () => {
         />
 
         <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-xs space-y-2.5 text-xs">
-          {notices.map(notice => (
+          {notices.filter(notice => !targetPeriodId || notice.periodId === targetPeriodId).map(notice => (
             <div
               key={notice.id}
               onClick={() => navigate('PAY_NOTICE_DETAIL', { noticeId: notice.id, periodId: notice.periodId, roomId: notice.roomId })}
@@ -752,6 +802,8 @@ export const BillingScreens: React.FC = () => {
   // 10. PAY_TRACK Screen (F.9 - Cross-links 46, 47, 48)
   if (currentScreenId === 'PAY_TRACK') {
     const filteredTxs = transactions.filter(t => {
+      if (params.noticeId && t.noticeId !== params.noticeId) return false;
+      if (params.periodId && t.periodId !== params.periodId) return false;
       const room = rooms.find(r => r.id === t.roomId);
       const tenant = tenants.find(te => te.id === t.tenantId);
       return t.noticeId.toLowerCase().includes(trackSearch.toLowerCase()) ||
@@ -780,7 +832,7 @@ export const BillingScreens: React.FC = () => {
           </div>
         </div>
 
-        <div className="flex-1 p-3 space-y-2.5 overflow-y-auto text-xs">
+        <div className="responsive-card-grid flex-1 p-3 space-y-2.5 overflow-y-auto text-xs">
           {filteredTxs.map(tx => {
             const room = rooms.find(r => r.id === tx.roomId);
             const tenant = tenants.find(te => te.id === tx.tenantId);

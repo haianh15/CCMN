@@ -16,6 +16,7 @@ import {
 import { useApp } from '../context/AppContext';
 import { AppHeader } from '../components/common/AppHeader';
 import { BottomTabs } from '../components/common/BottomTabs';
+import { MissingRecord } from '../components/common/MissingRecord';
 import { DepositSettlement } from '../types';
 
 export const DepositScreens: React.FC = () => {
@@ -27,27 +28,50 @@ export const DepositScreens: React.FC = () => {
     rooms,
     tenants,
     contracts,
+    checkoutProtocols,
+    showToast,
     createDepositSettlement,
     updateDepositSettlement,
     finalizeDepositSettlement
   } = useApp();
 
-  const targetSettlementId = (params.settlementId as string) || (depositSettlements[0]?.id || 'QTC-P401');
-  const currentSettlement = depositSettlements.find(s => s.id === targetSettlementId) || depositSettlements[0];
+  const targetSettlementId = params.settlementId as string | undefined;
+  const settlementRequired = !['DEPOSIT', 'DEPOSIT_NEW'].includes(currentScreenId);
+  const currentSettlement = (targetSettlementId
+    ? depositSettlements.find(s => s.id === targetSettlementId)
+    : settlementRequired ? undefined : depositSettlements[0])!;
   const settlementRoom = rooms.find(r => r.id === currentSettlement?.roomId);
   const settlementTenant = tenants.find(t => t.id === currentSettlement?.tenantId);
+  const defaultSettlementRoom = rooms.find(room =>
+    checkoutProtocols.some(protocol => protocol.roomId === room.id && protocol.actualReturnConfirmed) &&
+    !depositSettlements.some(settlement => settlement.roomId === room.id)
+  ) || rooms.find(room => room.status === 'CHUA_BAN_GIAO_XONG') || rooms.find(room => room.status === 'SAP_TRA');
+  const initialDepositRoom = rooms.find(room => room.id === params.roomId) || defaultSettlementRoom || rooms[0];
+  const initialDepositContract = contracts.find(contract => contract.roomId === initialDepositRoom?.id);
 
   // DEPOSIT_NEW form
-  const [depRoomId, setDepRoomId] = useState(params.roomId as string || 'P303');
-  const [depOriginal, setDepOriginal] = useState<number>(4600000);
+  const [depRoomId, setDepRoomId] = useState((params.roomId as string | undefined) || initialDepositRoom?.id || '');
+  const [depOriginal, setDepOriginal] = useState<number>(initialDepositContract?.depositAmount || initialDepositRoom?.basePrice || 0);
   const [depRentDue, setDepRentDue] = useState<number>(0);
-  const [depServiceDue, setDepServiceDue] = useState<number>(520000);
-  const [depDamage, setDepDamage] = useState<number>(Number(params.damageAmount) || 400000);
-  const [depDamageNotes, setDepDamageNotes] = useState((params.damageNotes as string) || 'Hỏng tay gạt cửa ban công + mất thẻ từ');
+  const [depServiceDue, setDepServiceDue] = useState<number>(Number(params.serviceAmount) || 0);
+  const [depDamage, setDepDamage] = useState<number>(Number(params.damageAmount) || 0);
+  const [depDamageNotes, setDepDamageNotes] = useState((params.damageNotes as string) || '');
+  const selectedDepositRoom = rooms.find(room => room.id === depRoomId);
+  const selectedDepositContract = contracts.find(contract => contract.roomId === depRoomId);
+  const selectedDepositTenant = tenants.find(tenant =>
+    tenant.id === selectedDepositRoom?.currentTenantId || tenant.id === selectedDepositContract?.tenantId
+  );
 
   // DEPOSIT_FINAL form
   const [finalProof, setFinalProof] = useState('https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?auto=format&fit=crop&w=400&q=80');
   const [finalMethod, setFinalMethod] = useState<DepositSettlement['paymentMethod']>('CHUYEN_KHOAN_HOAN_COC');
+
+  if (targetSettlementId && !depositSettlements.some(settlement => settlement.id === targetSettlementId)) {
+    return <MissingRecord title="Chi tiết quyết toán cọc" message="Quyết toán được chọn không còn tồn tại." backTo="DEPOSIT" />;
+  }
+  if (settlementRequired && !currentSettlement) {
+    return <MissingRecord title="Chi tiết quyết toán cọc" message="Chưa có dữ liệu quyết toán cọc cho luồng này." backTo="DEPOSIT" />;
+  }
 
   // 1. DEPOSIT List Screen (F.11)
   if (currentScreenId === 'DEPOSIT') {
@@ -59,7 +83,7 @@ export const DepositScreens: React.FC = () => {
           onBack={() => navigate('MORE')}
           rightAction={
             <button
-              onClick={() => navigate('DEPOSIT_NEW', { roomId: 'P303' })}
+              onClick={() => navigate('DEPOSIT_NEW', { roomId: defaultSettlementRoom?.id })}
               className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-semibold flex items-center space-x-1 cursor-pointer"
             >
               <Plus className="w-3.5 h-3.5" />
@@ -68,7 +92,7 @@ export const DepositScreens: React.FC = () => {
           }
         />
 
-        <div className="flex-1 p-3.5 space-y-2.5 overflow-y-auto text-xs">
+        <div className="responsive-card-grid flex-1 p-3.5 space-y-2.5 overflow-y-auto text-xs">
           {depositSettlements.map(st => {
             const r = rooms.find(rm => rm.id === st.roomId);
             const t = tenants.find(tn => tn.id === st.tenantId);
@@ -117,11 +141,15 @@ export const DepositScreens: React.FC = () => {
 
     const handleSaveNewSettlement = (e: React.FormEvent) => {
       e.preventDefault();
+      if (!selectedDepositRoom || !selectedDepositTenant || !selectedDepositContract) {
+        showToast('Vui lòng chọn phòng có khách thuê và hợp đồng hợp lệ trước khi lập quyết toán.');
+        return;
+      }
       const res = createDepositSettlement({
         roomId: depRoomId,
-        rentalId: `LT-${depRoomId}-01`,
-        tenantId: 'KT009',
-        contractId: 'HD-2026-009',
+        rentalId: selectedDepositContract.rentalId,
+        tenantId: selectedDepositTenant.id,
+        contractId: selectedDepositContract.id,
         originalDeposit: Number(depOriginal),
         remainingRentalObligation: Number(depRentDue),
         finalServiceObligation: Number(depServiceDue),
@@ -147,6 +175,32 @@ export const DepositScreens: React.FC = () => {
 
         <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-xs space-y-3 text-xs">
           <form onSubmit={handleSaveNewSettlement} className="space-y-3">
+            <div>
+              <label className="block font-bold text-slate-700 mb-1">Phòng cần quyết toán</label>
+              <select
+                value={depRoomId}
+                onChange={e => {
+                  const room = rooms.find(item => item.id === e.target.value);
+                  const contract = contracts.find(item => item.roomId === e.target.value);
+                  setDepRoomId(e.target.value);
+                  setDepOriginal(contract?.depositAmount || room?.basePrice || 0);
+                  setDepRentDue(0);
+                  setDepServiceDue(0);
+                  setDepDamage(0);
+                  setDepDamageNotes('');
+                }}
+                required
+                className="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white"
+              >
+                <option value="" disabled>Chọn phòng</option>
+                {rooms.map(room => <option key={room.id} value={room.id}>Phòng {room.roomNumber}</option>)}
+              </select>
+              {!selectedDepositTenant || !selectedDepositContract ? (
+                <p className="mt-1 text-[11px] text-amber-700">Phòng này chưa có khách thuê hoặc hợp đồng để đối soát.</p>
+              ) : (
+                <p className="mt-1 text-[11px] text-slate-500">{selectedDepositTenant.fullName} • {selectedDepositContract.code}</p>
+              )}
+            </div>
             <div>
               <label className="block font-bold text-slate-700 mb-1">Tiền đặt cọc ban đầu (1 tháng)</label>
               <input

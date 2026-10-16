@@ -20,6 +20,7 @@ import {
 import { useApp } from '../context/AppContext';
 import { AppHeader } from '../components/common/AppHeader';
 import { BottomTabs } from '../components/common/BottomTabs';
+import { MissingRecord } from '../components/common/MissingRecord';
 import { Tenant, CoResident } from '../types';
 
 export const TenantScreens: React.FC = () => {
@@ -37,8 +38,11 @@ export const TenantScreens: React.FC = () => {
     updateCoResident
   } = useApp();
 
-  const targetTenantId = (params.tenantId as string) || 'KT001';
-  const currentTenant = tenants.find(t => t.id === targetTenantId) || tenants[0];
+  const targetTenantId = params.tenantId as string | undefined;
+  const tenantRequired = !['TENANTS', 'TENANT_NEW'].includes(currentScreenId);
+  const currentTenant = (targetTenantId
+    ? tenants.find(t => t.id === targetTenantId)
+    : tenantRequired ? undefined : tenants[0])!;
   const tenantCoResidents = coResidents.filter(c => c.tenantId === currentTenant?.id);
   const tenantContracts = contracts.filter(c => c.tenantId === currentTenant?.id);
   const tenantRoom = rooms.find(r => r.id === currentTenant?.currentRoomId);
@@ -69,6 +73,10 @@ export const TenantScreens: React.FC = () => {
   const [editEmail, setEditEmail] = useState(currentTenant?.email || '');
   const [editAddress, setEditAddress] = useState(currentTenant?.permanentAddress || '');
   const [editReason, setEditReason] = useState('Khách thuê đổi số điện thoại mới');
+
+  if (tenantRequired && (!targetTenantId || !tenants.some(tenant => tenant.id === targetTenantId))) {
+    return <MissingRecord title="Hồ sơ khách thuê" message="Hồ sơ khách thuê được chọn không còn tồn tại." backTo="TENANTS" />;
+  }
 
   // 1. TENANTS Screen (F.3 / F.5)
   if (currentScreenId === 'TENANTS') {
@@ -136,7 +144,7 @@ export const TenantScreens: React.FC = () => {
           </div>
         </div>
 
-        <div className="flex-1 p-3 space-y-2 overflow-y-auto">
+        <div className="responsive-card-grid flex-1 p-3 space-y-2 overflow-y-auto">
           {filteredTenants.map(tenant => {
             const room = rooms.find(r => r.id === tenant.currentRoomId);
 
@@ -426,7 +434,10 @@ export const TenantScreens: React.FC = () => {
           {/* Action cross-links */}
           <div className="space-y-2 pt-1">
             <button
-              onClick={() => navigate('RENTAL_TERMS', { tenantId: currentTenant.id, roomId: currentTenant.currentRoomId || 'P103' })}
+              onClick={() => navigate('RENTAL_TERMS', {
+                tenantId: currentTenant.id,
+                roomId: currentTenant.currentRoomId || rooms.find(room => room.status === 'TRONG')?.id
+              })}
               className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold flex items-center justify-center space-x-1.5 shadow-xs cursor-pointer"
             >
               <span>Lập Điều Kiện Thuê Cho Khách Này</span>

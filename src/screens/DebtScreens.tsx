@@ -17,6 +17,7 @@ import {
 import { useApp } from '../context/AppContext';
 import { AppHeader } from '../components/common/AppHeader';
 import { BottomTabs } from '../components/common/BottomTabs';
+import { MissingRecord } from '../components/common/MissingRecord';
 import { OverdueDebt } from '../types';
 
 export const DebtScreens: React.FC = () => {
@@ -33,8 +34,10 @@ export const DebtScreens: React.FC = () => {
     recordTenantReply
   } = useApp();
 
-  const targetDebtId = (params.debtId as string) || (overdueDebts[0]?.id || 'DEBT-P301-09');
-  const currentDebt = overdueDebts.find(d => d.id === targetDebtId) || overdueDebts[0];
+  const targetDebtId = params.debtId as string | undefined;
+  const currentDebt = (targetDebtId
+    ? overdueDebts.find(d => d.id === targetDebtId)
+    : currentScreenId === 'DEBT' ? overdueDebts[0] : undefined)!;
   const debtRoom = rooms.find(r => r.id === currentDebt?.roomId);
   const debtTenant = tenants.find(t => t.id === currentDebt?.tenantId);
   const debtNotice = notices.find(n => n.id === currentDebt?.noticeId);
@@ -48,6 +51,13 @@ export const DebtScreens: React.FC = () => {
   const [replyChannel, setReplyChannel] = useState<'DIEN_THOAI' | 'ZALO' | 'TRUC_TIEP'>('ZALO');
   const [replyContent, setReplyContent] = useState('Khách hẹn chờ lương về sẽ chuyển khoản đủ 100%');
   const [promisedDate, setPromisedDate] = useState('18/10/2026');
+
+  if (targetDebtId && !overdueDebts.some(debt => debt.id === targetDebtId)) {
+    return <MissingRecord title="Chi tiết công nợ" message="Khoản công nợ được chọn không còn trong danh sách quá hạn." backTo="DEBT" />;
+  }
+  if (['DEBT_DETAIL', 'DEBT_REMIND', 'DEBT_REPLY', 'DEBT_BASIS'].includes(currentScreenId) && !currentDebt) {
+    return <MissingRecord title="Chi tiết công nợ" message="Hiện chưa có khoản nợ quá hạn để hiển thị." backTo="DEBT" />;
+  }
 
   // 1. DEBT Screen (F.10 - Cross-link 48)
   if (currentScreenId === 'DEBT') {
@@ -69,7 +79,7 @@ export const DebtScreens: React.FC = () => {
             </p>
           </div>
 
-          <div className="space-y-2.5">
+          <div className="responsive-card-grid space-y-2.5">
             {overdueDebts.map(debt => {
               const r = rooms.find(rm => rm.id === debt.roomId);
               const t = tenants.find(tn => tn.id === debt.tenantId);
@@ -220,7 +230,9 @@ export const DebtScreens: React.FC = () => {
           {/* CTA to DEBT_BASIS */}
           <div className="pt-1">
             <button
-              onClick={() => navigate('DEBT_BASIS', { debtId: currentDebt.id, contractId: debtContract?.id || 'HD-2026-007' })}
+              onClick={() => debtContract
+                ? navigate('DEBT_BASIS', { debtId: currentDebt.id, contractId: debtContract.id })
+                : navigate('CONTRACTS')}
               className="w-full py-3 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-xl text-xs flex items-center justify-center space-x-2 shadow-md cursor-pointer"
             >
               <span>Xem Căn Cứ Nợ Kéo Dài</span>
@@ -429,7 +441,9 @@ export const DebtScreens: React.FC = () => {
           {/* Cross-link 50 to CONTRACT_DETAIL */}
           <div className="pt-2">
             <button
-              onClick={() => navigate('CONTRACT_DETAIL', { contractId: debtContract?.id || 'HD-2026-007' })}
+              onClick={() => debtContract
+                ? navigate('CONTRACT_DETAIL', { contractId: debtContract.id, roomId: debtRoom?.id })
+                : navigate('CONTRACTS')}
               className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-xs flex items-center justify-center space-x-2 shadow-md cursor-pointer"
             >
               <span>Xem Điều Khoản Hợp Đồng Gốc</span>

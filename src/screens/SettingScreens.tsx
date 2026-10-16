@@ -23,12 +23,19 @@ export const SettingScreens: React.FC = () => {
     navigate,
     tariffs,
     bankConfigs,
+    periods,
+    rooms,
+    calculations,
     saveTariffConfig,
     saveBankConfig
   } = useApp();
 
   const activeTariff = tariffs.find(t => t.isActive) || tariffs[0];
   const activeBank = bankConfigs.find(b => b.isActive) || bankConfigs[0];
+  const latestCalculation = calculations[calculations.length - 1];
+  const latestPeriod = periods[periods.length - 1];
+  const defaultBillingRoom = rooms.find(room => room.id === latestCalculation?.roomId) ||
+    rooms.find(room => room.status === 'DANG_THUE') || rooms[0];
 
   // SET_TARIFF form
   const [tariffName, setTariffName] = useState('Phiên bản Đơn giá Q4/2026');
@@ -137,7 +144,17 @@ export const SettingScreens: React.FC = () => {
         notes: tariffNotes
       });
       // Cross-link 56 to PAY_CALC
-      navigate('PAY_CALC', { periodId: 'KY-2026-10', roomId: 'P101' });
+      if (latestCalculation) {
+        navigate('PAY_CALC', {
+          periodId: latestCalculation.periodId,
+          roomId: latestCalculation.roomId,
+          calcId: latestCalculation.id
+        });
+      } else if (latestPeriod && defaultBillingRoom) {
+        navigate('PAY_METER', { periodId: latestPeriod.id, roomId: defaultBillingRoom.id });
+      } else {
+        navigate('PAY');
+      }
     };
 
     return (
@@ -297,7 +314,15 @@ export const SettingScreens: React.FC = () => {
         updatedBy: 'Nguyễn Văn Minh'
       });
       // Cross-link 57 to PAY_NOTICE_NEW
-      navigate('PAY_NOTICE_NEW', { periodId: 'KY-2026-10', roomId: 'P101' });
+      if (latestCalculation) {
+        navigate('PAY_NOTICE_NEW', {
+          periodId: latestCalculation.periodId,
+          roomId: latestCalculation.roomId,
+          calcId: latestCalculation.id
+        });
+      } else {
+        navigate('PAY');
+      }
     };
 
     return (

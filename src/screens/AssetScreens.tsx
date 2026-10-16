@@ -16,6 +16,7 @@ import {
 import { useApp } from '../context/AppContext';
 import { AppHeader } from '../components/common/AppHeader';
 import { BottomTabs } from '../components/common/BottomTabs';
+import { MissingRecord } from '../components/common/MissingRecord';
 import { AssetInventoryItem, AssetIncident } from '../types';
 
 export const AssetScreens: React.FC = () => {
@@ -35,16 +36,16 @@ export const AssetScreens: React.FC = () => {
     updateIncident
   } = useApp();
 
-  const targetRoomId = (params.roomId as string) || 'P101';
-  const currentRoom = rooms.find(r => r.id === targetRoomId) || rooms[0];
+  const targetRoomId = params.roomId as string | undefined;
+  const currentRoom = (targetRoomId ? rooms.find(r => r.id === targetRoomId) : undefined)!;
   const roomAssets = assetItems.filter(item => item.roomId === currentRoom?.id);
   const roomIncidents = incidents.filter(i => i.roomId === currentRoom?.id);
   const currentReport = assetReports.find(r => r.roomId === currentRoom?.id);
   const currentProtocol = handoverProtocols.find(p => p.roomId === currentRoom?.id);
 
   // Selected incident
-  const targetIncidentId = (params.incidentId as string) || (roomIncidents[0]?.id || 'SC-2026-001');
-  const currentIncident = incidents.find(i => i.id === targetIncidentId) || incidents[0];
+  const targetIncidentId = params.incidentId as string | undefined;
+  const currentIncident = (targetIncidentId ? incidents.find(i => i.id === targetIncidentId) : roomIncidents[0])!;
 
   // ASSET_STATUS form
   const [reportDesc, setReportDesc] = useState(currentReport?.overallDescription || 'Tường sơn mới, sàn gạch sạch sẽ, các thiết bị điện lạnh chạy tốt.');
@@ -64,6 +65,13 @@ export const AssetScreens: React.FC = () => {
   // ASSET_INCIDENT_DETAIL update
   const [updateStep, setUpdateStep] = useState('');
   const [updateStatus, setUpdateStatus] = useState<AssetIncident['status']>('DANG_SUA');
+
+  if (!targetRoomId || !rooms.some(room => room.id === targetRoomId)) {
+    return <MissingRecord title="Tài sản phòng" message="Phòng được chọn không còn tồn tại." backTo="ROOMS" />;
+  }
+  if (currentScreenId === 'ASSET_INCIDENT_DETAIL' && (!targetIncidentId || !incidents.some(incident => incident.id === targetIncidentId))) {
+    return <MissingRecord title="Chi tiết sự cố" message="Sự cố được chọn không còn tồn tại." backTo="ASSET_INCIDENTS" />;
+  }
 
   // 1. ASSET Hub Screen (F.7)
   if (currentScreenId === 'ASSET') {
@@ -338,9 +346,9 @@ export const AssetScreens: React.FC = () => {
           }
         />
 
-        <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-xs space-y-2.5 text-xs">
-          {incidents.length > 0 ? (
-            incidents.map(inc => (
+        <div className="responsive-card-grid bg-white rounded-2xl p-4 border border-slate-200 shadow-xs space-y-2.5 text-xs">
+          {roomIncidents.length > 0 ? (
+            roomIncidents.map(inc => (
               <div
                 key={inc.id}
                 onClick={() => navigate('ASSET_INCIDENT_DETAIL', { incidentId: inc.id, roomId: inc.roomId })}

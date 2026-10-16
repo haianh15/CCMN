@@ -30,7 +30,9 @@ export const DashboardScreens: React.FC = () => {
     contracts,
     transactions,
     overdueDebts,
-    notices
+    periods,
+    meterReadings,
+    tenants
   } = useApp();
 
   const vacantRooms = rooms.filter(r => r.status === 'TRONG');
@@ -39,10 +41,31 @@ export const DashboardScreens: React.FC = () => {
   const unresolvedRooms = rooms.filter(r => r.status === 'CHUA_BAN_GIAO_XONG');
 
   const totalRooms = rooms.length;
-  const occupancyRate = Math.round((occupiedRooms.length / totalRooms) * 100);
+  const occupancyRate = totalRooms ? Math.round((occupiedRooms.length / totalRooms) * 100) : 0;
 
   // Contracts expiring in next 60 days
-  const expiringContracts = contracts.filter(c => c.status === 'HIEU_LUC');
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const expiringContracts = contracts.filter(contract => {
+    if (contract.status !== 'HIEU_LUC') return false;
+    const [day, month, year] = contract.endDate.split('/').map(Number);
+    const endDate = new Date(year, month - 1, day);
+    const daysUntilEnd = Math.ceil((endDate.getTime() - today.getTime()) / 86400000);
+    return Number.isFinite(endDate.getTime()) && daysUntilEnd >= 0 && daysUntilEnd <= 60;
+  });
+  const nearestExpiringContract = expiringContracts
+    .map(contract => ({
+      contract,
+      room: rooms.find(room => room.id === contract.roomId),
+      tenant: tenants.find(tenant => tenant.id === contract.tenantId)
+    }))
+    .sort((a, b) => {
+      const parse = (date: string) => {
+        const [day, month, year] = date.split('/').map(Number);
+        return new Date(year, month - 1, day).getTime();
+      };
+      return parse(a.contract.endDate) - parse(b.contract.endDate);
+    })[0];
 
   // Unpaid current month
   const unpaidTransactions = transactions.filter(t => t.status === 'CHUA_THU');
@@ -50,6 +73,12 @@ export const DashboardScreens: React.FC = () => {
 
   // Overdue debts
   const totalOverdueAmount = overdueDebts.reduce((acc, d) => acc + d.unpaidAmount, 0);
+  const latestPeriod = periods[periods.length - 1];
+  const roomForMeterReading = rooms.find(room =>
+    room.status === 'DANG_THUE' &&
+    !meterReadings.some(reading => reading.roomId === room.id && reading.periodId === latestPeriod?.id)
+  ) || occupiedRooms[0];
+  const roomForNewLease = vacantRooms[0];
 
   // HOME Screen (F.3)
   if (currentScreenId === 'HOME') {
@@ -69,7 +98,7 @@ export const DashboardScreens: React.FC = () => {
                 <span className="text-[10px] uppercase font-bold tracking-wider text-blue-200 bg-white/10 px-2 py-0.5 rounded-full">
                   Chủ nhà: Nguyễn Văn Minh
                 </span>
-                <h2 className="text-lg font-extrabold mt-1">Toà Nhà 12 Căn Hộ</h2>
+                <h2 className="text-lg font-extrabold mt-1">Toà Nhà {totalRooms} Căn Hộ</h2>
                 <p className="text-xs text-blue-100">
                   Tỷ lệ lấp đầy: <strong className="text-white text-sm">{occupancyRate}%</strong> ({occupiedRooms.length}/{totalRooms} phòng đang thuê)
                 </p>
@@ -116,9 +145,13 @@ export const DashboardScreens: React.FC = () => {
               <div className="mt-2">
                 <div className="text-[11px] font-semibold text-slate-500">Hợp đồng hết hạn</div>
                 <div className="text-base font-extrabold text-amber-900 mt-0.5">
-                  1 phòng <span className="text-xs font-normal text-slate-500">(28/10)</span>
+                  {expiringContracts.length} phòng
                 </div>
-                <p className="text-[10px] text-slate-500 line-clamp-1 mt-0.5">P.201 - Phạm Minh Đức</p>
+                <p className="text-[10px] text-slate-500 line-clamp-1 mt-0.5">
+                  {nearestExpiringContract
+                    ? `P.${nearestExpiringContract.room?.roomNumber || nearestExpiringContract.contract.roomId} - ${nearestExpiringContract.tenant?.fullName || 'Chưa gán khách'}`
+                    : 'Không có hợp đồng sắp hết hạn'}
+                </p>
               </div>
             </div>
 
@@ -140,7 +173,11 @@ export const DashboardScreens: React.FC = () => {
                 <div className="text-base font-extrabold text-rose-900 mt-0.5">
                   {totalOverdueAmount.toLocaleString()} <span className="text-xs font-normal">đ</span>
                 </div>
-                <p className="text-[10px] text-rose-600 font-medium line-clamp-1 mt-0.5">1 khoản P.301 (10 ngày)</p>
+                <p className="text-[10px] text-rose-600 font-medium line-clamp-1 mt-0.5">
+                  {overdueDebts.length
+                    ? `${overdueDebts.length} khoản nợ • Phòng ${rooms.find(room => room.id === overdueDebts[0].roomId)?.roomNumber || overdueDebts[0].roomId}`
+                    : 'Không có khoản nợ quá hạn'}
+                </p>
               </div>
             </div>
 
@@ -201,18 +238,22 @@ export const DashboardScreens: React.FC = () => {
                 <span className="truncate">Thêm hồ sơ khách</span>
               </button>
               <button
-                onClick={() => navigate('PAY_METER', { periodId: 'KY-2026-10', roomId: 'P101' })}
+                onClick={() => latestPeriod && roomForMeterReading
+                  ? navigate('PAY_METER', { periodId: latestPeriod.id, roomId: roomForMeterReading.id })
+                  : navigate('PAY_PERIOD')}
                 className="p-2.5 rounded-xl bg-slate-50 hover:bg-blue-50 hover:text-blue-700 border border-slate-200/80 text-left font-semibold transition-all flex items-center space-x-2 cursor-pointer"
               >
                 <Sparkles className="w-4 h-4 text-amber-500 shrink-0" />
-                <span className="truncate">Ghi chỉ số điện nước</span>
+                <span className="truncate">{roomForMeterReading ? `Ghi chỉ số P.${roomForMeterReading.roomNumber}` : 'Chọn kỳ ghi chỉ số'}</span>
               </button>
               <button
-                onClick={() => navigate('ROOM_CHECK', { roomId: 'P103' })}
+                onClick={() => roomForNewLease
+                  ? navigate('ROOM_CHECK', { roomId: roomForNewLease.id })
+                  : navigate('ROOMS')}
                 className="p-2.5 rounded-xl bg-slate-50 hover:bg-blue-50 hover:text-blue-700 border border-slate-200/80 text-left font-semibold transition-all flex items-center space-x-2 cursor-pointer"
               >
                 <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                <span className="truncate">Checklist cho thuê P103</span>
+                <span className="truncate">{roomForNewLease ? `Checklist P.${roomForNewLease.roomNumber}` : 'Xem danh sách phòng'}</span>
               </button>
               <button
                 onClick={() => navigate('SET_TARIFF')}
@@ -318,7 +359,7 @@ export const DashboardScreens: React.FC = () => {
       <div className="flex-1 flex flex-col justify-between bg-slate-50">
         <AppHeader title="Chức Năng Mở Rộng" subtitle="Hợp đồng, Cọc, Báo cáo & Cài đặt" showBack={false} />
 
-        <div className="flex-1 p-3.5 space-y-4 overflow-y-auto">
+        <div className="responsive-section-grid flex-1 p-3.5 space-y-4 overflow-y-auto">
           {menuSections.map((sec, idx) => (
             <div key={idx} className="space-y-1.5">
               <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider px-1">
