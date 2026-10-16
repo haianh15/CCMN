@@ -1,0 +1,6 @@
+{
+  "name": "Quản Lý Chung Cư Mini",
+  "description": "Ứng dụng mobile quản trị chung cư mini dành cho Chủ nhà: bao phủ đầy đủ 86 điểm sitemap, 63 use case, quy trình cọc, hợp đồng, thu tiền QR, kiểm kê tài sản và báo cáo.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
