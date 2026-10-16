@@ -1,4 +1,5 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
+import type { Session, User } from '@supabase/supabase-js';
 import {
   ScreenId,
   Room,
@@ -44,6 +45,7 @@ import {
   INITIAL_OVERDUE_DEBTS,
   INITIAL_DEPOSIT_SETTLEMENTS
 } from '../data/seedData';
+import { isSupabaseConfigured, supabase } from '../lib/supabase';
 
 export interface AuditLog {
   id: string;
@@ -87,17 +89,20 @@ interface PersistedAppData {
 interface AppContextType {
   // Auth
   isAuthenticated: boolean;
-  currentUser: { username: string; fullName: string; role: 'CHU_NHA'; phone: string; email: string } | null;
-  isFirstPasswordChangeRequired: boolean;
-  failedAttempts: number;
-  lockUntil: number | null;
-  sessionRemainingMinutes: number;
-  login: (username: string, pass: string) => { success: boolean; error?: string };
-  changeFirstPassword: (newPass: string, confirmPass: string) => { success: boolean; error?: string };
-  forgotPassword: (email: string) => { success: boolean; message: string };
-  resetPassword: (newPass: string) => { success: boolean; error?: string };
-  changePassword: (oldPass: string, newPass: string) => { success: boolean; error?: string };
-  logout: () => void;
+  currentUser: { id: string; username: string; fullName: string; role: 'CHU_NHA'; phone: string; email: string } | null;
+  authLoading: boolean;
+  dataLoading: boolean;
+  isConfigured: boolean;
+  databaseError: string | null;
+  saveStatus: 'idle' | 'saving' | 'saved' | 'error' | 'conflict';
+  saveError: string | null;
+  login: (email: string, pass: string) => Promise<{ success: boolean; error?: string }>;
+  forgotPassword: (email: string) => Promise<{ success: boolean; message: string }>;
+  resetPassword: (newPass: string) => Promise<{ success: boolean; error?: string }>;
+  changePassword: (newPass: string) => Promise<{ success: boolean; error?: string }>;
+  logout: () => Promise<void>;
+  retryLoadData: () => void;
+  retrySave: () => void;
 
   // Navigation
   currentScreenId: ScreenId;
@@ -195,113 +200,282 @@ interface AppContextType {
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
-const LOCAL_STORAGE_KEY = 'MINI_APARTMENT_STORE_V1';
-const SIGNED_OUT_SESSION_KEY = 'MINI_APARTMENT_SIGNED_OUT';
+const createAppData = (): PersistedAppData => ({
+  rooms: INITIAL_ROOMS,
+  tenants: INITIAL_TENANTS,
+  coResidents: INITIAL_CO_RESIDENTS,
+  contracts: INITIAL_CONTRACTS,
+  rentalTerms: INITIAL_RENTAL_TERMS,
+  assetItems: INITIAL_ASSET_ITEMS,
+  assetReports: INITIAL_ASSET_REPORTS,
+  handoverProtocols: INITIAL_HANDOVER_PROTOCOLS,
+  incidents: INITIAL_INCIDENTS,
+  checkoutPlans: INITIAL_CHECKOUT_PLANS,
+  checkoutProtocols: INITIAL_CHECKOUT_PROTOCOLS,
+  tariffs: INITIAL_TARIFFS,
+  bankConfigs: INITIAL_BANK_CONFIGS,
+  periods: INITIAL_PERIODS,
+  meterReadings: INITIAL_METER_READINGS,
+  calculations: INITIAL_CALCULATIONS,
+  notices: INITIAL_PAYMENT_NOTICES,
+  transactions: INITIAL_PAYMENT_TRANSACTIONS,
+  overdueDebts: INITIAL_OVERDUE_DEBTS,
+  depositSettlements: INITIAL_DEPOSIT_SETTLEMENTS,
+  auditLogs: [{
+    id: 'LOG-001',
+    timestamp: new Date().toLocaleString('vi-VN'),
+    action: 'HE_THONG_KHOI_DONG',
+    entityType: 'SYSTEM',
+    entityId: 'SYS',
+    details: 'Khởi tạo dữ liệu quản lý tòa nhà',
+    user: 'Chủ nhà'
+  }]
+});
 
-const readSignedOutSession = () => {
-  try {
-    return sessionStorage.getItem(SIGNED_OUT_SESSION_KEY) === 'true';
-  } catch (error) {
-    console.error('Không thể đọc trạng thái đăng nhập trong phiên trình duyệt.', error);
-    return false;
-  }
-};
+const mapAuthUser = (user: User) => ({
+  id: user.id,
+  username: user.email || '',
+  fullName: user.user_metadata.full_name || user.email || 'Chủ nhà',
+  role: 'CHU_NHA' as const,
+  phone: user.user_metadata.phone || '',
+  email: user.email || ''
+});
 
-const saveSignedOutSession = (signedOut: boolean) => {
-  try {
-    if (signedOut) {
-      sessionStorage.setItem(SIGNED_OUT_SESSION_KEY, 'true');
-    } else {
-      sessionStorage.removeItem(SIGNED_OUT_SESSION_KEY);
-    }
-    return true;
-  } catch (error) {
-    console.error('Không thể lưu trạng thái đăng nhập trong phiên trình duyệt.', error);
-    return false;
-  }
-};
-
-const readPersistedAppData = (): Partial<PersistedAppData> => {
-  try {
-    const rawData = localStorage.getItem(LOCAL_STORAGE_KEY);
-    if (!rawData) return {};
-
-    const parsed: unknown = JSON.parse(rawData);
-    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-      throw new Error('Dữ liệu lưu cục bộ không đúng định dạng.');
-    }
-    return parsed as Partial<PersistedAppData>;
-  } catch (error) {
-    console.error('Không thể đọc dữ liệu đã lưu trong trình duyệt.', error);
-    return {};
-  }
-};
+const getErrorMessage = (error: unknown) =>
+  error instanceof Error ? error.message : 'Đã xảy ra lỗi kết nối. Vui lòng thử lại.';
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [persistedData] = useState(readPersistedAppData);
-  const [initiallySignedOut] = useState(readSignedOutSession);
-
-  // Auth state
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(!initiallySignedOut);
-  const [currentUser, setCurrentUser] = useState<{
-    username: string;
-    fullName: string;
-    role: 'CHU_NHA';
-    phone: string;
-    email: string;
-  } | null>(initiallySignedOut ? null : {
-    username: 'admin',
-    fullName: 'Nguyễn Văn Minh (Chủ nhà)',
-    role: 'CHU_NHA',
-    phone: '0912 345 678',
-    email: 'minh.nguyen.landlord@gmail.com'
-  });
-  const [isFirstPasswordChangeRequired, setIsFirstPasswordChangeRequired] = useState<boolean>(false);
-  const [failedAttempts, setFailedAttempts] = useState<number>(0);
-  const [lockUntil, setLockUntil] = useState<number | null>(null);
-  const [sessionRemainingMinutes] = useState<number>(30);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [currentUser, setCurrentUser] = useState<AppContextType['currentUser']>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [dataLoading, setDataLoading] = useState(false);
+  const [databaseError, setDatabaseError] = useState<string | null>(null);
+  const [saveStatus, setSaveStatus] = useState<AppContextType['saveStatus']>('idle');
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [loadAttempt, setLoadAttempt] = useState(0);
+  const [saveAttempt, setSaveAttempt] = useState(0);
+  const [dataReadyForUserId, setDataReadyForUserId] = useState<string | null>(null);
+  const revisionRef = useRef(1);
+  const lastSavedPayload = useRef<string | null>(null);
 
   // Navigation state
-  const [currentScreenId, setCurrentScreenId] = useState<ScreenId>(initiallySignedOut ? 'LOGIN' : 'HOME');
+  const [currentScreenId, setCurrentScreenId] = useState<ScreenId>('LOGIN');
   const [params, setParams] = useState<Record<string, any>>({});
   const [historyStack, setHistoryStack] = useState<NavigationEntry[]>([{ screenId: 'HOME' }]);
   const [activeBottomTab, setActiveBottomTab] = useState<'HOME' | 'ROOMS' | 'TENANTS' | 'PAY' | 'MORE'>('HOME');
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   // Entities state
-  const [rooms, setRooms] = useState<Room[]>(persistedData.rooms || INITIAL_ROOMS);
-  const [tenants, setTenants] = useState<Tenant[]>(persistedData.tenants || INITIAL_TENANTS);
-  const [coResidents, setCoResidents] = useState<CoResident[]>(persistedData.coResidents || INITIAL_CO_RESIDENTS);
-  const [contracts, setContracts] = useState<Contract[]>(persistedData.contracts || INITIAL_CONTRACTS);
-  const [rentalTerms, setRentalTerms] = useState<Record<string, RentalTerms>>(persistedData.rentalTerms || INITIAL_RENTAL_TERMS);
-  const [assetItems, setAssetItems] = useState<AssetInventoryItem[]>(persistedData.assetItems || INITIAL_ASSET_ITEMS);
-  const [assetReports, setAssetReports] = useState<AssetStatusReport[]>(persistedData.assetReports || INITIAL_ASSET_REPORTS);
-  const [handoverProtocols, setHandoverProtocols] = useState<AssetHandoverProtocol[]>(persistedData.handoverProtocols || INITIAL_HANDOVER_PROTOCOLS);
-  const [incidents, setIncidents] = useState<AssetIncident[]>(persistedData.incidents || INITIAL_INCIDENTS);
-  const [checkoutPlans, setCheckoutPlans] = useState<CheckoutPlan[]>(persistedData.checkoutPlans || INITIAL_CHECKOUT_PLANS);
-  const [checkoutProtocols, setCheckoutProtocols] = useState<CheckoutProtocol[]>(persistedData.checkoutProtocols || INITIAL_CHECKOUT_PROTOCOLS);
-  const [tariffs, setTariffs] = useState<TariffConfig[]>(persistedData.tariffs || INITIAL_TARIFFS);
-  const [bankConfigs, setBankConfigs] = useState<BankConfig[]>(persistedData.bankConfigs || INITIAL_BANK_CONFIGS);
-  const [periods, setPeriods] = useState<BillingPeriod[]>(persistedData.periods || INITIAL_PERIODS);
-  const [meterReadings, setMeterReadings] = useState<MeterReading[]>(persistedData.meterReadings || INITIAL_METER_READINGS);
-  const [calculations, setCalculations] = useState<PeriodCalculation[]>(persistedData.calculations || INITIAL_CALCULATIONS);
-  const [notices, setNotices] = useState<PaymentNotice[]>(persistedData.notices || INITIAL_PAYMENT_NOTICES);
-  const [transactions, setTransactions] = useState<PaymentTransaction[]>(persistedData.transactions || INITIAL_PAYMENT_TRANSACTIONS);
-  const [overdueDebts, setOverdueDebts] = useState<OverdueDebt[]>(persistedData.overdueDebts || INITIAL_OVERDUE_DEBTS);
-  const [depositSettlements, setDepositSettlements] = useState<DepositSettlement[]>(persistedData.depositSettlements || INITIAL_DEPOSIT_SETTLEMENTS);
-  const [auditLogs, setAuditLogs] = useState<AuditLog[]>(persistedData.auditLogs || [
-    {
-      id: 'LOG-001',
-      timestamp: '15/10/2026 08:30:00',
-      action: 'HE_THONG_KHOI_DONG',
-      entityType: 'SYSTEM',
-      entityId: 'SYS',
-      details: 'Khởi động hệ thống quản lý chung cư mini với 12 phòng và 15 hồ sơ khách thuê',
-      user: 'Nguyễn Văn Minh'
-    }
-  ]);
+  const [rooms, setRooms] = useState<Room[]>(INITIAL_ROOMS);
+  const [tenants, setTenants] = useState<Tenant[]>(INITIAL_TENANTS);
+  const [coResidents, setCoResidents] = useState<CoResident[]>(INITIAL_CO_RESIDENTS);
+  const [contracts, setContracts] = useState<Contract[]>(INITIAL_CONTRACTS);
+  const [rentalTerms, setRentalTerms] = useState<Record<string, RentalTerms>>(INITIAL_RENTAL_TERMS);
+  const [assetItems, setAssetItems] = useState<AssetInventoryItem[]>(INITIAL_ASSET_ITEMS);
+  const [assetReports, setAssetReports] = useState<AssetStatusReport[]>(INITIAL_ASSET_REPORTS);
+  const [handoverProtocols, setHandoverProtocols] = useState<AssetHandoverProtocol[]>(INITIAL_HANDOVER_PROTOCOLS);
+  const [incidents, setIncidents] = useState<AssetIncident[]>(INITIAL_INCIDENTS);
+  const [checkoutPlans, setCheckoutPlans] = useState<CheckoutPlan[]>(INITIAL_CHECKOUT_PLANS);
+  const [checkoutProtocols, setCheckoutProtocols] = useState<CheckoutProtocol[]>(INITIAL_CHECKOUT_PROTOCOLS);
+  const [tariffs, setTariffs] = useState<TariffConfig[]>(INITIAL_TARIFFS);
+  const [bankConfigs, setBankConfigs] = useState<BankConfig[]>(INITIAL_BANK_CONFIGS);
+  const [periods, setPeriods] = useState<BillingPeriod[]>(INITIAL_PERIODS);
+  const [meterReadings, setMeterReadings] = useState<MeterReading[]>(INITIAL_METER_READINGS);
+  const [calculations, setCalculations] = useState<PeriodCalculation[]>(INITIAL_CALCULATIONS);
+  const [notices, setNotices] = useState<PaymentNotice[]>(INITIAL_PAYMENT_NOTICES);
+  const [transactions, setTransactions] = useState<PaymentTransaction[]>(INITIAL_PAYMENT_TRANSACTIONS);
+  const [overdueDebts, setOverdueDebts] = useState<OverdueDebt[]>(INITIAL_OVERDUE_DEBTS);
+  const [depositSettlements, setDepositSettlements] = useState<DepositSettlement[]>(INITIAL_DEPOSIT_SETTLEMENTS);
+  const [auditLogs, setAuditLogs] = useState<AuditLog[]>(createAppData().auditLogs);
+
+  const applyAppData = (source: unknown) => {
+    const incoming = typeof source === 'object' && source !== null && !Array.isArray(source)
+      ? source as Partial<PersistedAppData>
+      : {};
+    const defaults = createAppData();
+    const normalized: PersistedAppData = {
+      rooms: incoming.rooms || defaults.rooms,
+      tenants: incoming.tenants || defaults.tenants,
+      coResidents: incoming.coResidents || defaults.coResidents,
+      contracts: incoming.contracts || defaults.contracts,
+      rentalTerms: incoming.rentalTerms || defaults.rentalTerms,
+      assetItems: incoming.assetItems || defaults.assetItems,
+      assetReports: incoming.assetReports || defaults.assetReports,
+      handoverProtocols: incoming.handoverProtocols || defaults.handoverProtocols,
+      incidents: incoming.incidents || defaults.incidents,
+      checkoutPlans: incoming.checkoutPlans || defaults.checkoutPlans,
+      checkoutProtocols: incoming.checkoutProtocols || defaults.checkoutProtocols,
+      tariffs: incoming.tariffs || defaults.tariffs,
+      bankConfigs: incoming.bankConfigs || defaults.bankConfigs,
+      periods: incoming.periods || defaults.periods,
+      meterReadings: incoming.meterReadings || defaults.meterReadings,
+      calculations: incoming.calculations || defaults.calculations,
+      notices: incoming.notices || defaults.notices,
+      transactions: incoming.transactions || defaults.transactions,
+      overdueDebts: incoming.overdueDebts || defaults.overdueDebts,
+      depositSettlements: incoming.depositSettlements || defaults.depositSettlements,
+      auditLogs: incoming.auditLogs || defaults.auditLogs
+    };
+    setRooms(normalized.rooms);
+    setTenants(normalized.tenants);
+    setCoResidents(normalized.coResidents);
+    setContracts(normalized.contracts);
+    setRentalTerms(normalized.rentalTerms);
+    setAssetItems(normalized.assetItems);
+    setAssetReports(normalized.assetReports);
+    setHandoverProtocols(normalized.handoverProtocols);
+    setIncidents(normalized.incidents);
+    setCheckoutPlans(normalized.checkoutPlans);
+    setCheckoutProtocols(normalized.checkoutProtocols);
+    setTariffs(normalized.tariffs);
+    setBankConfigs(normalized.bankConfigs);
+    setPeriods(normalized.periods);
+    setMeterReadings(normalized.meterReadings);
+    setCalculations(normalized.calculations);
+    setNotices(normalized.notices);
+    setTransactions(normalized.transactions);
+    setOverdueDebts(normalized.overdueDebts);
+    setDepositSettlements(normalized.depositSettlements);
+    setAuditLogs(normalized.auditLogs);
+    return normalized;
+  };
 
   useEffect(() => {
+    if (!supabase || !isSupabaseConfigured) {
+      setDatabaseError('Chưa cấu hình kết nối Supabase. Hãy thêm URL và khóa public vào biến môi trường.');
+      setAuthLoading(false);
+      return;
+    }
+
+    let active = true;
+    const applySession = (session: Session | null) => {
+      const user = session?.user ?? null;
+      setCurrentUser(user ? mapAuthUser(user) : null);
+      setIsAuthenticated(Boolean(user));
+      setDataLoading(Boolean(user));
+      if (!user) setDataReadyForUserId(null);
+    };
+
+    supabase.auth.getSession()
+      .then(({ data, error }) => {
+        if (!active) return;
+        if (error) {
+          console.error('Không thể kiểm tra phiên đăng nhập Supabase.', error);
+          setDatabaseError('Không thể kiểm tra phiên đăng nhập. Vui lòng tải lại trang.');
+        } else {
+          applySession(data.session);
+        }
+        setAuthLoading(false);
+      })
+      .catch(error => {
+        if (!active) return;
+        console.error('Không thể kết nối Supabase Auth.', error);
+        setDatabaseError(getErrorMessage(error));
+        setAuthLoading(false);
+      });
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (!active) return;
+      applySession(session);
+      if (event === 'PASSWORD_RECOVERY') {
+        setCurrentScreenId('RESET');
+        setHistoryStack([{ screenId: 'RESET' }]);
+      } else if (event === 'SIGNED_IN') {
+        setCurrentScreenId('HOME');
+        setHistoryStack([{ screenId: 'HOME' }]);
+      } else if (event === 'SIGNED_OUT') {
+        setCurrentScreenId('LOGIN');
+        setHistoryStack([{ screenId: 'LOGIN' }]);
+      }
+    });
+
+    return () => {
+      active = false;
+      subscription.unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    const client = supabase;
+    if (!authLoading && !currentUser) {
+      setDataLoading(false);
+      setDataReadyForUserId(null);
+      return;
+    }
+    if (!authLoading && currentUser && client) {
+      const userId = currentUser.id;
+      let active = true;
+      setDataLoading(true);
+      setDatabaseError(null);
+      setSaveError(null);
+      setSaveStatus('idle');
+      setDataReadyForUserId(null);
+
+      const loadData = async () => {
+        const { data: row, error } = await client
+          .from('app_state')
+          .select('data, revision')
+          .eq('user_id', userId)
+          .maybeSingle();
+        if (error) throw error;
+        if (!active) return;
+
+        if (row) {
+          const normalized = applyAppData(row.data);
+          revisionRef.current = row.revision;
+          lastSavedPayload.current = JSON.stringify(normalized);
+        } else {
+          const initialData = createAppData();
+          const { data: inserted, error: insertError } = await client
+            .from('app_state')
+            .insert({ user_id: userId, data: initialData, revision: 1 })
+            .select('revision')
+            .single();
+
+          if (insertError?.code === '23505') {
+            const { data: concurrentRow, error: retryError } = await client
+              .from('app_state')
+              .select('data, revision')
+              .eq('user_id', userId)
+              .single();
+            if (retryError) throw retryError;
+            if (!active) return;
+            const normalized = applyAppData(concurrentRow.data);
+            revisionRef.current = concurrentRow.revision;
+            lastSavedPayload.current = JSON.stringify(normalized);
+          } else if (insertError) {
+            throw insertError;
+          } else {
+            applyAppData(initialData);
+            revisionRef.current = inserted.revision;
+            lastSavedPayload.current = JSON.stringify(initialData);
+          }
+        }
+
+        if (active) {
+          setDataReadyForUserId(userId);
+          setDataLoading(false);
+          setDatabaseError(null);
+          setSaveStatus('saved');
+        }
+      };
+
+      loadData().catch(error => {
+        if (!active) return;
+        console.error('Không thể tải dữ liệu từ Supabase.', error);
+        setDatabaseError('Không tải được dữ liệu. Kiểm tra bảng app_state và chính sách RLS trong Supabase.');
+        setDataLoading(false);
+      });
+
+      return () => {
+        active = false;
+      };
+    }
+  }, [authLoading, currentUser?.id, loadAttempt]);
+
+  useEffect(() => {
+    const client = supabase;
+    if (!currentUser || dataReadyForUserId !== currentUser.id || !client) return;
     const data: PersistedAppData = {
       rooms,
       tenants,
@@ -325,14 +499,49 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       depositSettlements,
       auditLogs
     };
+    const serialized = JSON.stringify(data);
+    if (serialized === lastSavedPayload.current) return;
 
-    try {
-      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(data));
-    } catch (error) {
-      console.error('Không thể lưu dữ liệu vào trình duyệt.', error);
-      showToast('Không thể lưu dữ liệu. Vui lòng kiểm tra dung lượng trình duyệt.');
-    }
+    const userId = currentUser.id;
+    const expectedRevision = revisionRef.current;
+    const timer = window.setTimeout(async () => {
+      setSaveStatus('saving');
+      setSaveError(null);
+      try {
+        const { data: updated, error } = await client
+          .from('app_state')
+          .update({
+            data,
+            revision: expectedRevision + 1,
+            updated_at: new Date().toISOString()
+          })
+          .eq('user_id', userId)
+          .eq('revision', expectedRevision)
+          .select('revision')
+          .maybeSingle();
+
+        if (error) throw error;
+        if (!updated) {
+          setSaveStatus('conflict');
+          setSaveError('Dữ liệu đã được đổi ở thiết bị khác. Tải bản mới nhất để tránh ghi đè.');
+          return;
+        }
+
+        revisionRef.current = updated.revision;
+        lastSavedPayload.current = serialized;
+        setSaveStatus('saved');
+      } catch (error) {
+        console.error('Không thể lưu dữ liệu lên Supabase.', error);
+        setSaveStatus('error');
+        setSaveError('Không lưu được thay đổi. Kiểm tra kết nối rồi thử lưu lại.');
+      }
+    }, 600);
+
+    return () => window.clearTimeout(timer);
   }, [
+    currentUser?.id,
+    dataReadyForUserId,
+    saveAttempt,
     rooms,
     tenants,
     coResidents,
@@ -355,6 +564,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     depositSettlements,
     auditLogs
   ]);
+
+  const retryLoadData = () => setLoadAttempt(attempt => attempt + 1);
+  const retrySave = () => setSaveAttempt(attempt => attempt + 1);
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
@@ -417,115 +629,80 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // Auth actions
-  const login = (user: string, pass: string) => {
-    if (lockUntil && Date.now() < lockUntil) {
-      const remainingSecs = Math.ceil((lockUntil - Date.now()) / 1000);
-      return { success: false, error: `Tài khoản đang bị tạm khóa do nhập sai 5 lần. Vui lòng thử lại sau ${remainingSecs} giây.` };
-    }
-
-    if (user.trim() === 'admin' && pass === 'Admin@12345678') {
-      setFailedAttempts(0);
-      saveSignedOutSession(false);
-      setIsAuthenticated(true);
-      setCurrentUser({
-        username: 'admin',
-        fullName: 'Nguyễn Văn Minh (Chủ nhà)',
-        role: 'CHU_NHA',
-        phone: '0912 345 678',
-        email: 'minh.nguyen.landlord@gmail.com'
-      });
-      addAuditLog('DANG_NHAP_THANH_CONG', 'AUTH', 'admin', 'Đăng nhập thành công vào hệ thống quản lý');
-      navigate('HOME');
-      return { success: true };
-    } else if (user.trim() === 'firstuser' && pass === '123456') {
-      // First-time user test
-      setFailedAttempts(0);
-      saveSignedOutSession(false);
-      setIsAuthenticated(false);
-      setIsFirstPasswordChangeRequired(true);
-      navigate('FIRSTPASS');
-      return { success: true };
-    } else {
-      const newFails = failedAttempts + 1;
-      setFailedAttempts(newFails);
-      if (newFails >= 5) {
-        const lockDuration = 15 * 60 * 1000; // 15 mins
-        setLockUntil(Date.now() + lockDuration);
-        return { success: false, error: 'Đã nhập sai quá 5 lần liên tiếp. Tài khoản tạm khóa 15 phút để bảo đảm an toàn.' };
+  const login = async (email: string, pass: string) => {
+    if (!supabase) return { success: false, error: 'Chưa cấu hình kết nối dữ liệu.' };
+    try {
+      const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password: pass });
+      if (error) {
+        const message = error.message.toLowerCase().includes('invalid login credentials')
+          ? 'Email hoặc mật khẩu chưa đúng.'
+          : error.message;
+        return { success: false, error: message };
       }
-      return { success: false, error: `Sai tên đăng nhập hoặc mật khẩu. Còn ${5 - newFails} lần thử trước khi tạm khóa.` };
+      return { success: true };
+    } catch (error) {
+      console.error('Không thể đăng nhập Supabase.', error);
+      return { success: false, error: 'Không kết nối được máy chủ. Kiểm tra mạng rồi thử lại.' };
     }
   };
 
-  const changeFirstPassword = (newPass: string, confirmPass: string) => {
-    if (newPass.length < 12) {
-      return { success: false, error: 'Mật khẩu mới phải có tối thiểu 12 ký tự theo quy định bảo mật bắt buộc.' };
+  const forgotPassword = async (email: string) => {
+    if (!supabase) return { success: false, message: 'Chưa cấu hình kết nối dữ liệu.' };
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
+        redirectTo: window.location.origin
+      });
+      if (error) return { success: false, message: error.message };
+      return { success: true, message: 'Nếu email đã đăng ký, hướng dẫn đặt lại mật khẩu sẽ được gửi qua email.' };
+    } catch (error) {
+      console.error('Không thể gửi email đặt lại mật khẩu.', error);
+      return { success: false, message: 'Không gửi được email. Kiểm tra mạng rồi thử lại.' };
     }
-    if (newPass !== confirmPass) {
-      return { success: false, error: 'Mật khẩu xác nhận không khớp.' };
-    }
-    setIsFirstPasswordChangeRequired(false);
-    saveSignedOutSession(false);
-    setIsAuthenticated(true);
-    setCurrentUser({
-      username: 'firstuser',
-      fullName: 'Chủ nhà mới',
-      role: 'CHU_NHA',
-      phone: '0901 234 567',
-      email: 'landlord@example.com'
-    });
-    addAuditLog('DOI_MAT_KHAU_LAN_DAU', 'AUTH', 'firstuser', 'Đã đổi mật khẩu lần đầu an toàn');
-    showToast('Đổi mật khẩu lần đầu thành công! Chào mừng bạn vào giao diện quản trị.');
-    navigate('HOME');
-    return { success: true };
   };
 
-  const forgotPassword = (email: string) => {
-    if (!email || !email.includes('@')) {
-      return { success: false, message: 'Vui lòng nhập định dạng email hợp lệ.' };
+  const resetPassword = async (newPass: string) => {
+    if (!supabase) return { success: false, error: 'Chưa cấu hình kết nối dữ liệu.' };
+    if (newPass.length < 10) return { success: false, error: 'Mật khẩu cần có ít nhất 10 ký tự.' };
+    try {
+      const { error } = await supabase.auth.updateUser({ password: newPass });
+      if (error) return { success: false, error: error.message };
+      showToast('Đã cập nhật mật khẩu.');
+      navigate('HOME', {}, true);
+      return { success: true };
+    } catch (error) {
+      console.error('Không thể cập nhật mật khẩu Supabase.', error);
+      return { success: false, error: 'Không cập nhật được mật khẩu. Vui lòng thử lại.' };
     }
-    addAuditLog('YEU_CAU_QUEN_MAT_KHAU', 'AUTH', email, 'Yêu cầu gửi liên kết đặt lại mật khẩu');
-    return {
-      success: true,
-      message: 'Nếu email tồn tại trong hệ thống Chủ nhà, liên kết đặt lại mật khẩu đã được tạo mô phỏng.'
-    };
   };
 
-  const resetPassword = (newPass: string) => {
-    if (newPass.length < 12) {
-      return { success: false, error: 'Mật khẩu mới phải có ít nhất 12 ký tự.' };
+  const changePassword = async (newPass: string) => {
+    if (!supabase) return { success: false, error: 'Chưa cấu hình kết nối dữ liệu.' };
+    if (newPass.length < 10) return { success: false, error: 'Mật khẩu cần có ít nhất 10 ký tự.' };
+    try {
+      const { error } = await supabase.auth.updateUser({ password: newPass });
+      if (error) return { success: false, error: error.message };
+      showToast('Đã đổi mật khẩu.');
+      return { success: true };
+    } catch (error) {
+      console.error('Không thể đổi mật khẩu Supabase.', error);
+      return { success: false, error: 'Không đổi được mật khẩu. Vui lòng thử lại.' };
     }
-    addAuditLog('DAT_LAI_MAT_KHAU', 'AUTH', 'admin', 'Đặt lại mật khẩu thành công qua liên kết an toàn');
-    showToast('Đặt lại mật khẩu thành công. Vui lòng đăng nhập lại.');
-    navigate('LOGIN');
-    return { success: true };
   };
 
-  const changePassword = (oldPass: string, newPass: string) => {
-    if (oldPass !== 'Admin@12345678') {
-      return { success: false, error: 'Mật khẩu hiện tại không chính xác.' };
+  const logout = async () => {
+    if (!supabase) return;
+    try {
+      const { error } = await supabase.auth.signOut();
+      if (error) {
+        console.error('Không thể đăng xuất Supabase.', error);
+        showToast('Không đăng xuất được. Vui lòng thử lại.');
+        return;
+      }
+      showToast('Đã đăng xuất.');
+    } catch (error) {
+      console.error('Không thể đăng xuất Supabase.', error);
+      showToast('Không đăng xuất được. Vui lòng thử lại.');
     }
-    if (newPass.length < 12) {
-      return { success: false, error: 'Mật khẩu mới phải có ít nhất 12 ký tự.' };
-    }
-    if (newPass === oldPass) {
-      return { success: false, error: 'Mật khẩu mới không được trùng với mật khẩu cũ.' };
-    }
-    addAuditLog('DOI_MAT_KHAU_DINH_KY', 'AUTH', currentUser?.username || 'admin', 'Đã đổi mật khẩu và thu hồi phiên cũ');
-    showToast('Đã đổi mật khẩu thành công. Hệ thống đã thu hồi phiên làm việc, vui lòng đăng nhập lại.');
-    logout();
-    return { success: true };
-  };
-
-  const logout = () => {
-    const sessionSaved = saveSignedOutSession(true);
-    setIsAuthenticated(false);
-    setCurrentUser(null);
-    addAuditLog('DANG_XUAT', 'AUTH', 'user', 'Đã đăng xuất và xóa phiên');
-    navigate('LOGIN', {}, true);
-    showToast(sessionSaved
-      ? 'Đã đăng xuất thành công.'
-      : 'Đã đăng xuất trong trang hiện tại, nhưng trình duyệt không lưu được trạng thái phiên.');
   };
 
   // Room methods
@@ -1371,16 +1548,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       value={{
         isAuthenticated,
         currentUser,
-        isFirstPasswordChangeRequired,
-        failedAttempts,
-        lockUntil,
-        sessionRemainingMinutes,
+        authLoading,
+        dataLoading,
+        isConfigured: isSupabaseConfigured,
+        databaseError,
+        saveStatus,
+        saveError,
         login,
-        changeFirstPassword,
         forgotPassword,
         resetPassword,
         changePassword,
         logout,
+        retryLoadData,
+        retrySave,
 
         currentScreenId,
         params,

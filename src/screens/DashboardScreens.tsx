@@ -3,7 +3,6 @@ import {
   Building2,
   KeyRound,
   FileText,
-  AlertCircle,
   Banknote,
   BarChart3,
   ChevronRight,
@@ -26,6 +25,7 @@ export const DashboardScreens: React.FC = () => {
   const {
     currentScreenId,
     navigate,
+    currentUser,
     rooms,
     contracts,
     transactions,
@@ -83,24 +83,24 @@ export const DashboardScreens: React.FC = () => {
   // HOME Screen (F.3)
   if (currentScreenId === 'HOME') {
     return (
-      <div className="dashboard-home flex-1 flex flex-col justify-between bg-slate-50">
+      <div className="dashboard-home flex min-h-0 flex-1 flex-col bg-slate-50">
         <AppHeader
-          title="Tổng Quan Quản Lý"
-          subtitle="Chung cư Mini GreenHouse (18 Hoàng Quốc Việt)"
+          title="Tổng quan"
+          subtitle="GreenHouse · 18 Hoàng Quốc Việt"
           showBack={false}
         />
 
-        <div className="dashboard-home__content flex-1 p-3.5 space-y-3.5 overflow-y-auto xl:grid xl:grid-cols-2 xl:content-start xl:items-start xl:gap-5 xl:space-y-0 xl:p-6">
+        <div className="dashboard-home__content mx-auto flex w-full max-w-6xl flex-1 flex-col gap-4 overflow-y-auto p-3 sm:p-5 xl:p-6">
           {/* Building Hero Card */}
           <div className="rounded-2xl bg-gradient-to-r from-blue-700 via-blue-800 to-indigo-900 text-white p-4 shadow-md relative overflow-hidden">
             <div className="relative z-10 flex items-center justify-between">
               <div>
-                <span className="text-[10px] uppercase font-bold tracking-wider text-blue-200 bg-white/10 px-2 py-0.5 rounded-full">
-                  Chủ nhà: Nguyễn Văn Minh
+                <span className="text-xs font-medium text-blue-100">
+                  {currentUser?.fullName || 'Chủ nhà'}
                 </span>
-                <h2 className="text-lg font-extrabold mt-1">Toà Nhà {totalRooms} Căn Hộ</h2>
+                <h2 className="mt-1 text-lg font-bold">Tòa nhà có {totalRooms} phòng</h2>
                 <p className="text-xs text-blue-100">
-                  Tỷ lệ lấp đầy: <strong className="text-white text-sm">{occupancyRate}%</strong> ({occupiedRooms.length}/{totalRooms} phòng đang thuê)
+                  Đang có khách thuê: <strong className="text-white text-sm">{occupancyRate}%</strong> ({occupiedRooms.length}/{totalRooms} phòng)
                 </p>
               </div>
               <div className="w-12 h-12 rounded-2xl bg-white/15 backdrop-blur flex items-center justify-center border border-white/20">
@@ -111,11 +111,11 @@ export const DashboardScreens: React.FC = () => {
             {/* Quick status bar */}
             <div className="grid grid-cols-4 gap-1.5 mt-3 pt-3 border-t border-white/15 text-center text-xs">
               <div className="bg-white/10 rounded-lg py-1.5 px-1 cursor-pointer hover:bg-white/20" onClick={() => navigate('ROOMS')}>
-                <div className="text-[10px] text-blue-200">Đang thuê</div>
+                <div className="text-[10px] text-blue-200">Có khách</div>
                 <div className="font-extrabold text-sm text-white">{occupiedRooms.length}</div>
               </div>
               <div className="bg-white/10 rounded-lg py-1.5 px-1 cursor-pointer hover:bg-white/20" onClick={() => navigate('ROOMS')}>
-                <div className="text-[10px] text-emerald-200">Phòng trống</div>
+                <div className="text-[10px] text-emerald-200">Còn trống</div>
                 <div className="font-extrabold text-sm text-emerald-300">{vacantRooms.length}</div>
               </div>
               <div className="bg-white/10 rounded-lg py-1.5 px-1 cursor-pointer hover:bg-white/20" onClick={() => navigate('ROOMS')}>
@@ -123,14 +123,14 @@ export const DashboardScreens: React.FC = () => {
                 <div className="font-extrabold text-sm text-amber-300">{pendingCheckoutRooms.length}</div>
               </div>
               <div className="bg-white/10 rounded-lg py-1.5 px-1 cursor-pointer hover:bg-white/20" onClick={() => navigate('ROOMS')}>
-                <div className="text-[10px] text-rose-200">Chưa xong</div>
+                <div className="text-[10px] text-rose-200">Chưa bàn giao</div>
                 <div className="font-extrabold text-sm text-rose-300">{unresolvedRooms.length}</div>
               </div>
             </div>
           </div>
 
           {/* 4 Primary Navigation Cards (Section G Links 1-4) */}
-          <div className="grid grid-cols-2 gap-2.5">
+          <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
             {/* Card 1: Expiring Leases -> ROOM_TERM */}
             <div
               onClick={() => navigate('ROOM_TERM')}
@@ -143,7 +143,7 @@ export const DashboardScreens: React.FC = () => {
                 <ChevronRight className="w-4 h-4 text-slate-400" />
               </div>
               <div className="mt-2">
-                <div className="text-[11px] font-semibold text-slate-500">Hợp đồng hết hạn</div>
+                <div className="text-sm font-medium text-slate-600">Hợp đồng sắp hết hạn</div>
                 <div className="text-base font-extrabold text-amber-900 mt-0.5">
                   {expiringContracts.length} phòng
                 </div>
@@ -169,7 +169,7 @@ export const DashboardScreens: React.FC = () => {
                 </span>
               </div>
               <div className="mt-2">
-                <div className="text-[11px] font-semibold text-rose-700">Công nợ quá hạn</div>
+                <div className="text-sm font-medium text-rose-700">Tiền thuê còn nợ</div>
                 <div className="text-base font-extrabold text-rose-900 mt-0.5">
                   {totalOverdueAmount.toLocaleString()} <span className="text-xs font-normal">đ</span>
                 </div>
@@ -193,11 +193,11 @@ export const DashboardScreens: React.FC = () => {
                 <ChevronRight className="w-4 h-4 text-slate-400" />
               </div>
               <div className="mt-2">
-                <div className="text-[11px] font-semibold text-slate-500">Phải thu kỳ này</div>
+                <div className="text-sm font-medium text-slate-600">Tiền chưa thu kỳ này</div>
                 <div className="text-base font-extrabold text-blue-900 mt-0.5">
                   {totalUnpaidAmount.toLocaleString()} <span className="text-xs font-normal">đ</span>
                 </div>
-                <p className="text-[10px] text-slate-500 line-clamp-1 mt-0.5">Theo dõi sao kê VietQR</p>
+                <p className="text-[10px] text-slate-500 line-clamp-1 mt-0.5">Theo dõi các khoản cần thu</p>
               </div>
             </div>
 
@@ -213,9 +213,9 @@ export const DashboardScreens: React.FC = () => {
                 <ChevronRight className="w-4 h-4 text-slate-400" />
               </div>
               <div className="mt-2">
-                <div className="text-[11px] font-semibold text-slate-500">Báo cáo & Đối soát</div>
+                <div className="text-sm font-medium text-slate-600">Báo cáo</div>
                 <div className="text-base font-extrabold text-indigo-900 mt-0.5">
-                  4 Phân hệ
+                  Xem kết quả
                 </div>
                 <p className="text-[10px] text-slate-500 line-clamp-1 mt-0.5">Lấp đầy • Dòng tiền • Sửa lệch</p>
               </div>
@@ -224,9 +224,9 @@ export const DashboardScreens: React.FC = () => {
 
           {/* Quick Shortcuts */}
           <div className="dashboard-home__shortcuts bg-white rounded-2xl p-3.5 border border-slate-200 shadow-xs space-y-2.5">
-            <div className="text-xs font-bold text-slate-900 flex items-center justify-between">
-              <span>Lối Tắt Thao Tác Nhanh</span>
-              <span className="text-[11px] text-slate-400 font-normal">Quy trình thường dùng</span>
+            <div className="flex items-center justify-between">
+              <span className="text-sm font-semibold text-slate-900">Thao tác nhanh</span>
+              <span className="text-xs text-slate-500">Các việc thường làm</span>
             </div>
 
             <div className="grid grid-cols-2 gap-2 text-xs">
@@ -265,14 +265,6 @@ export const DashboardScreens: React.FC = () => {
             </div>
           </div>
 
-          {/* Action Reminder Banner */}
-          <div className="dashboard-home__notice bg-amber-50 border border-amber-200 rounded-2xl p-3 flex items-start space-x-2.5">
-            <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-            <div className="text-xs text-amber-900">
-              <strong className="block font-bold">Lưu ý nghiệp vụ tháng 10/2026:</strong>
-              Phòng 402 đã ký hợp đồng nhưng chưa đủ 1 tháng cọc + 1 tháng thuê đầu nên chưa thể giao phòng. Cần vào tiếp nhận phòng sau khi đối chiếu sao kê.
-            </div>
-          </div>
         </div>
 
         <BottomTabs />
@@ -284,19 +276,19 @@ export const DashboardScreens: React.FC = () => {
   if (currentScreenId === 'MORE') {
     const menuSections = [
       {
-        title: 'Hợp Đồng & Khách Thuê',
+        title: 'Hợp đồng & khách thuê',
         items: [
           {
             screenId: 'CONTRACTS' as const,
-            title: 'Danh sách Hợp đồng thuê',
-            desc: 'Dự thảo, đã ký giấy, chờ hiệu lực, hợp đồng nối tiếp',
+            title: 'Hợp đồng thuê',
+            desc: 'Xem và cập nhật hợp đồng',
             icon: FileText,
             color: 'text-indigo-600 bg-indigo-50'
           },
           {
             screenId: 'RENTAL_TERMS' as const,
-            title: 'Thỏa thuận Điều kiện thuê',
-            desc: 'Thống nhất giá, 1 tháng cọc, trả trước tháng đầu',
+            title: 'Điều kiện thuê',
+            desc: 'Thống nhất giá thuê và tiền cọc',
             icon: Sliders,
             color: 'text-blue-600 bg-blue-50',
             params: { roomId: 'P103' }
@@ -304,50 +296,50 @@ export const DashboardScreens: React.FC = () => {
         ]
       },
       {
-        title: 'Thanh Lý & Tài Chính',
+        title: 'Tiền cọc & công nợ',
         items: [
           {
             screenId: 'DEPOSIT' as const,
-            title: 'Quyết toán tiền cọc (Deposit)',
-            desc: 'Khấu trừ tiền nhà, điện nước, bồi thường hư hại & hoàn cọc',
+            title: 'Hoàn trả tiền cọc',
+            desc: 'Tính khoản khấu trừ và tiền hoàn lại',
             icon: DollarSign,
             color: 'text-emerald-600 bg-emerald-50'
           },
           {
             screenId: 'DEBT' as const,
-            title: 'Công nợ quá hạn',
-            desc: 'Danh sách nợ quá hạn, ghi nhận nhắc nợ và phản hồi',
+            title: 'Tiền thuê còn nợ',
+            desc: 'Xem khoản nợ và ghi lại việc nhắc khách',
             icon: ShieldAlert,
             color: 'text-rose-600 bg-rose-50'
           }
         ]
       },
       {
-        title: 'Báo Cáo Thống Kê',
+        title: 'Báo cáo',
         items: [
           {
             screenId: 'REPORTS' as const,
-            title: 'Trung tâm Báo cáo Quản trị',
-            desc: 'Lấp đầy phòng, doanh thu phải thu / thực thu, đối soát lệch',
+            title: 'Báo cáo nhà cho thuê',
+            desc: 'Xem phòng đang thuê và tiền thu được',
             icon: BarChart3,
             color: 'text-violet-600 bg-violet-50'
           }
         ]
       },
       {
-        title: 'Hệ Thống & Tài Khoản',
+        title: 'Cài đặt & tài khoản',
         items: [
           {
             screenId: 'SETTINGS' as const,
-            title: 'Cài đặt Đơn giá & Ngân hàng',
-            desc: 'Biểu phí điện nước theo phiên bản hiệu lực, tài khoản QR',
+            title: 'Đơn giá & ngân hàng',
+            desc: 'Cài tiền điện, nước và tài khoản nhận tiền',
             icon: Settings,
             color: 'text-slate-700 bg-slate-100'
           },
           {
             screenId: 'ACCOUNT' as const,
-            title: 'Tài khoản Quản lý & Đăng xuất',
-            desc: 'Thông tin cá nhân, đổi mật khẩu định kỳ, thu hồi phiên',
+            title: 'Tài khoản',
+            desc: 'Đổi mật khẩu hoặc đăng xuất',
             icon: UserCheck,
             color: 'text-teal-700 bg-teal-50'
           }
@@ -357,7 +349,7 @@ export const DashboardScreens: React.FC = () => {
 
     return (
       <div className="flex-1 flex flex-col justify-between bg-slate-50">
-        <AppHeader title="Chức Năng Mở Rộng" subtitle="Hợp đồng, Cọc, Báo cáo & Cài đặt" showBack={false} />
+        <AppHeader title="Thêm" subtitle="Hợp đồng, báo cáo và cài đặt" showBack={false} />
 
         <div className="responsive-section-grid flex-1 p-3.5 space-y-4 overflow-y-auto">
           {menuSections.map((sec, idx) => (

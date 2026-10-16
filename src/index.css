@@ -17,6 +17,13 @@ body {
   min-width: 0;
 }
 
+.app-viewport h1,
+.app-viewport h2,
+.app-viewport h3 {
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
 .app-viewport :is(input, select, textarea, button) {
   max-width: 100%;
 }
@@ -43,34 +50,31 @@ body {
   .dashboard-home__content {
     min-height: 0;
     overflow-y: hidden;
+    gap: 0.5rem;
     padding: 0.5rem;
   }
 
-  .dashboard-home__content > :not(:last-child) {
-    margin-block: 0.5rem;
-  }
-
   .dashboard-home__content > :first-child {
-    padding: 0.75rem;
+    padding: 0.875rem;
   }
 
   .dashboard-home__content > :nth-child(2) {
-    gap: 0.375rem;
+    gap: 0.5rem;
   }
 
   .dashboard-home__content > :nth-child(2) > * {
-    padding: 0.375rem;
+    min-height: 7rem;
+    padding: 0.625rem;
   }
 
-  .dashboard-home__shortcuts,
-  .dashboard-home__notice {
+  .dashboard-home__shortcuts {
     display: none;
   }
 }
 
 @media (max-width: 639px) and (max-height: 700px) {
   .dashboard-home__content > :first-child {
-    padding: 0.5rem;
+    padding: 0.625rem;
   }
 
   .dashboard-home__content > :first-child > div:first-child > div:first-child {
@@ -85,6 +89,12 @@ body {
   .dashboard-home__content > :nth-child(2) > * > div:last-child {
     margin-top: 0.25rem;
   }
+
+  @media (min-width: 640px) {
+    .dashboard-home__content > :nth-child(2) > * {
+      min-height: 9rem;
+    }
+  }
 }
 
 @media (min-width: 768px) {
@@ -93,7 +103,7 @@ body {
   }
 
   .app-viewport > * {
-    max-width: 1600px;
+    max-width: 1280px;
     margin-inline: auto;
   }
 
